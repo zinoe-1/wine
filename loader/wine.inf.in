@@ -521,6 +521,29 @@ HKLM,%FontSubStr%,"Times New Roman Greek,161",,"Times New Roman,161"
 HKLM,%FontSubStr%,"Times New Roman TUR,162",,"Times New Roman,162"
 HKLM,System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts,"LogPixels",0x10003,0x00000060
 
+; Default font family replacements for fonts commonly referenced by Windows
+; applications but not shipped with Wine. Each value maps a missing family name
+; to an ordered list of candidates; the first family present in the system font
+; collection wins. Consumed by both GDI (win32u) and DirectWrite.
+; This fixes CJK applications that hardcode Chinese Windows font names
+; (e.g. Microsoft YaHei / SimSun) and would otherwise render tofu or crash
+; (WPF FontFamily resolution FailFast).
+HKCU,Software\Wine\Fonts\Replacements,"Microsoft YaHei",0x10000,"Noto Sans CJK SC","WenQuanYi Zen Hei","Noto Sans"
+HKCU,Software\Wine\Fonts\Replacements,"Microsoft YaHei UI",0x10000,"Noto Sans CJK SC","Noto Sans"
+HKCU,Software\Wine\Fonts\Replacements,"微软雅黑",0x10000,"Noto Sans CJK SC","Noto Sans"
+HKCU,Software\Wine\Fonts\Replacements,"SimSun",0x10000,"Noto Serif CJK SC","Noto Sans CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"NSimSun",0x10000,"Noto Serif CJK SC","Noto Sans CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"宋体",0x10000,"Noto Serif CJK SC","Noto Sans CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"SimHei",0x10000,"Noto Sans CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"黑体",0x10000,"Noto Sans CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"KaiTi",0x10000,"Noto Serif CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"FangSong",0x10000,"Noto Serif CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"Consolas",0x10000,"DejaVu Sans Mono","Noto Sans Mono CJK SC"
+HKCU,Software\Wine\Fonts\Replacements,"Arial",0x10000,"Liberation Sans","Nimbus Sans","DejaVu Sans"
+HKCU,Software\Wine\Fonts\Replacements,"Courier New",0x10000,"Nimbus Mono PS","DejaVu Sans Mono"
+HKCU,Software\Wine\Fonts\Replacements,"Times New Roman",0x10000,"Nimbus Roman","DejaVu Serif"
+HKCU,Software\Wine\Fonts\Replacements,"Segoe UI",0x10000,"Noto Sans","DejaVu Sans"
+
 [MCI]
 HKLM,%Mci32Str%,"AVIVideo",,"mciavi32.dll"
 HKLM,%Mci32Str%,"CDAudio",,"mcicda.dll"
