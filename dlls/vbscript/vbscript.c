@@ -1460,6 +1460,9 @@ static HRESULT WINAPI AXSite_QueryService(IServiceProvider *iface,
 
     TRACE("(%p)->(%s %s %p)\n", This, debugstr_guid(guidService), debugstr_guid(riid), ppv);
 
+    if(!This->sp)
+        return E_NOINTERFACE;
+
     return IServiceProvider_QueryService(This->sp, guidService, riid, ppv);
 }
 
@@ -1472,19 +1475,19 @@ static IServiceProviderVtbl AXSiteVtbl = {
 
 IUnknown *create_ax_site(script_ctx_t *ctx)
 {
-    IServiceProvider *sp;
+    IServiceProvider *sp = NULL;
     AXSite *ret;
     HRESULT hres;
 
     hres = IActiveScriptSite_QueryInterface(ctx->site, &IID_IServiceProvider, (void**)&sp);
     if(FAILED(hres)) {
-        ERR("Could not get IServiceProvider iface: %08lx\n", hres);
-        return NULL;
+        TRACE("Could not get IServiceProvider iface: %08lx\n", hres);
     }
 
     ret = malloc(sizeof(*ret));
     if(!ret) {
-        IServiceProvider_Release(sp);
+        if(sp)
+            IServiceProvider_Release(sp);
         return NULL;
     }
 
