@@ -583,7 +583,12 @@ DWORD NETCON_secure_connect(netconn_t *connection, server_t *server)
 
     /* FIXME: when got version alert and FIN from server */
     /* fallback to connect without TLSv1.1/TLSv1.2        */
-    if (res == ERROR_INTERNET_SECURITY_CHANNEL_ERROR && have_compat_cred_handle)
+    /* When the connection goes through a proxy, connection->server is the
+     * target server, whose address is never resolved (only the proxy's
+     * is); a raw reconnect to it is both impossible and wrong, so only
+     * fall back for direct connections. */
+    if (res == ERROR_INTERNET_SECURITY_CHANNEL_ERROR && have_compat_cred_handle
+        && connection->server->addr)
     {
         closesocket(connection->socket);
         res = create_netconn_socket(connection->server, NULL, 0, connection, 500);
