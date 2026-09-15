@@ -1,6 +1,11 @@
-;; .INF script for the basic Wine configuration
+﻿;; .INF script for the basic Wine configuration
 ;; Version: @PACKAGE_STRING@
 ;;
+;; NOTE: this file is UTF-8 **with a BOM** on purpose. setupapi decodes an
+;; INF without a BOM using the current ANSI codepage (CP_ACP), which
+;; garbles the non-ASCII font family names further down (they would be
+;; written to the registry under mangled names and never match a font
+;; request). Do not strip the BOM.
 ;; This should be run through setupapi:
 ;;   rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 wine.inf
 ;;
