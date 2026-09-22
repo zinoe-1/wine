@@ -1914,11 +1914,17 @@ static HRESULT interp_newenum(exec_ctx_t *ctx)
     switch(V_VT(v.v)) {
     case VT_DISPATCH|VT_BYREF:
     case VT_DISPATCH: {
+        IDispatch *disp = V_ISBYREF(v.v) ? *V_DISPATCHREF(v.v) : V_DISPATCH(v.v);
         IEnumVARIANT *iter;
         DISPPARAMS dp = {0};
         VARIANT iterv;
 
-        hres = disp_call(ctx->script, V_ISBYREF(v.v) ? *V_DISPATCHREF(v.v) : V_DISPATCH(v.v), DISPID_NEWENUM, TRUE, &dp, &iterv);
+        if(!disp) {
+            release_val(&v);
+            return MAKE_VBSERROR(VBSE_NOT_ENUM);
+        }
+
+        hres = disp_call(ctx->script, disp, DISPID_NEWENUM, TRUE, &dp, &iterv);
         release_val(&v);
         if(FAILED(hres))
             return hres;
@@ -3067,11 +3073,19 @@ OP_LIST
 #undef X
 };
 
+/* Fixed-size script arrays are marked FADF_STATIC to match native, which makes
+ * SafeArrayDestroy leave the data block alone; clear it so the data gets freed. */
+void release_safearray(SAFEARRAY *sa)
+{
+    sa->fFeatures &= ~FADF_STATIC;
+    SafeArrayDestroy(sa);
+}
+
 void release_dynamic_var(dynamic_var_t *var)
 {
     VariantClear(&var->v);
     if(var->array)
-        SafeArrayDestroy(var->array);
+        release_safearray(var->array);
 }
 
 static void release_exec(exec_ctx_t *ctx)
@@ -3100,7 +3114,7 @@ static void release_exec(exec_ctx_t *ctx)
     if(ctx->arrays) {
         for(i=0; i < ctx->func->array_cnt; i++) {
             if(ctx->arrays[i])
-                SafeArrayDestroy(ctx->arrays[i]);
+                release_safearray(ctx->arrays[i]);
         }
         free(ctx->arrays);
     }
@@ -3170,6 +3184,8 @@ HRESULT exec_script(script_ctx_t *ctx, BOOL extern_caller, function_t *func, vbd
     HRESULT hres = S_OK;
 
     exec.code = func->code_ctx;
+    exec.script = ctx;
+    exec.func = func;
     exec.caller = ctx->caller_exec;
     ctx->caller_exec = NULL;
 
@@ -3247,8 +3263,6 @@ HRESULT exec_script(script_ctx_t *ctx, BOOL extern_caller, function_t *func, vbd
     }
 
     exec.instr = exec.code->instrs + func->code_off;
-    exec.script = ctx;
-    exec.func = func;
 
     prev_named_item = ctx->current_named_item;
     ctx->current_named_item = exec.code->named_item;

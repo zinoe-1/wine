@@ -88,7 +88,7 @@ static inline void leave_syscall_callback(void)
 
     cpu_area->InSyscallCallback = 0;
 
-    if (cpu_area->SuspendDoorbell && *cpu_area->SuspendDoorbell)
+    if (!cpu_area->InSimulation && cpu_area->SuspendDoorbell && *cpu_area->SuspendDoorbell)
     {
         RtlCaptureContext( &ctx );
         if (*cpu_area->SuspendDoorbell) NtContinue( &ctx, FALSE );
@@ -2145,9 +2145,9 @@ __ASM_GLOBAL_FUNC( "#process_breakpoint",
                    "brk #0xf000\n\t"
                    "ret\n"
                    "process_breakpoint_handler:\n\t"
-                   "ldr x4, [x2, #0x108]\n\t" /* context->Pc */
+                   "ldr x4, [x2, #0xf8]\n\t"  /* context->Rip */
                    "add x4, x4, #4\n\t"
-                   "str x4, [x2, #0x108]\n\t"
+                   "str x4, [x2, #0xf8]\n\t"
                    "mov w0, #0\n\t"           /* ExceptionContinueExecution */
                    "ret" )
 

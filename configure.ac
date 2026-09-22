@@ -1023,15 +1023,6 @@ case $host_os in
         ac_cv_func_clGetPlatformInfo=yes
     fi
 
-    dnl Check for MTLDevice registryID property
-    AC_LANG_PUSH([Objective C])
-    AC_CACHE_CHECK([whether MTLDevice protocol supports registryID property], ac_cv_mtldevice_registryid,
-                   [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <Metal/Metal.h>]], [[id<MTLDevice> device; device.registryID;]])],
-                                      [ac_cv_mtldevice_registryid=yes],
-                                      [ac_cv_mtldevice_registryid=no])])
-    AC_LANG_POP([Objective C])
-    test $ac_cv_mtldevice_registryid != yes || AC_DEFINE(HAVE_MTLDEVICE_REGISTRYID, 1, [Define if MTLDevice protocol has registryID property.])
-
     UNIXLDFLAGS="-dynamiclib -install_name @rpath/\$(UNIXLIB) -Wl,-rpath,@loader_path\/"
     AC_SUBST(WINELOADER_DEPENDS,"wine_info.plist")
     ;;
@@ -1292,6 +1283,7 @@ then
 
     dnl *** All of the following tests require X11/Xlib.h
     AC_CHECK_HEADERS([X11/extensions/shape.h \
+                      X11/extensions/XInput.h \
                       X11/extensions/XInput2.h \
                       X11/extensions/XShm.h \
                       X11/extensions/Xfixes.h \
@@ -2423,6 +2415,7 @@ enable_icui18n=${enable_icui18n:-$enable_cplusplus}
 
 dnl Disable some programs for other PE archs
 enable_conhost=${enable_conhost:-$HOST_ARCH}
+enable_lsass=${enable_lsass:-$HOST_ARCH}
 enable_plugplay=${enable_plugplay:-$HOST_ARCH}
 enable_rpcss=${enable_rpcss:-$HOST_ARCH}
 enable_services=${enable_services:-$HOST_ARCH}
@@ -2442,12 +2435,41 @@ enable_netsh=${enable_netsh:-yes}
 enable_regsvr32=${enable_regsvr32:-yes}
 enable_rundll32=${enable_rundll32:-yes}
 
+dnl Disable 32-bit only modules for other archs
+enable_crtdll=${enable_crtdll:-i386}
+enable_ctl3d32=${enable_ctl3d32:-i386}
+enable_d3d8=${enable_d3d8:-i386}
+enable_d3dim=${enable_d3dim:-i386}
+enable_d3dim700=${enable_d3dim700:-i386}
+enable_dmband=${enable_dmband:-i386}
+enable_dmcompos=${enable_dmcompos:-i386}
+enable_dmime=${enable_dmime:-i386}
+enable_dmscript=${enable_dmscript:-i386}
+enable_dmstyle=${enable_dmstyle:-i386}
+enable_dplay=${enable_dplay:-i386}
+enable_dplayx=${enable_dplayx:-i386}
+enable_dpwsockx=${enable_dpwsockx:-i386}
+enable_iccvid=${enable_iccvid:-i386}
+enable_iprop=${enable_iprop:-i386}
+enable_msscript_ocx=${enable_msscript_ocx:-i386}
+enable_msvcp70=${enable_msvcp70:-i386}
+enable_msvcp71=${enable_msvcp71:-i386}
+enable_msvcr70=${enable_msvcr70:-i386}
+enable_msvcr71=${enable_msvcr71:-i386}
+enable_msvcrt20=${enable_msvcrt20:-i386}
+enable_msvcrt40=${enable_msvcrt40:-i386}
+enable_msvcrtd=${enable_msvcrtd:-i386}
+enable_olecli32=${enable_olecli32:-i386}
+enable_olepro32=${enable_olepro32:-i386}
+enable_olethk32=${enable_olethk32:-i386}
+enable_twain_32=${enable_twain_32:-i386}
+enable_vdmdbg=${enable_vdmdbg:-i386}
+
 dnl Disable Win16-related modules
 enable_win16=${enable_win16:-i386}
 enable_w32skrnl=${enable_w32skrnl:-$enable_win16}
 enable_wow32=${enable_wow32:-$enable_win16}
 enable_winevdm=${enable_winevdm:-$enable_win16}
-enable_twain_32=${enable_twain_32:-i386}
 
 dnl Disable winetest too if tests are disabled
 enable_winetest=${enable_winetest:-$enable_tests}
@@ -3619,6 +3641,7 @@ WINE_CONFIG_MAKEFILE(programs/iexplore)
 WINE_CONFIG_MAKEFILE(programs/ipconfig)
 WINE_CONFIG_MAKEFILE(programs/klist)
 WINE_CONFIG_MAKEFILE(programs/lodctr)
+WINE_CONFIG_MAKEFILE(programs/lsass)
 WINE_CONFIG_MAKEFILE(programs/makecab)
 WINE_CONFIG_MAKEFILE(programs/mofcomp)
 WINE_CONFIG_MAKEFILE(programs/mshta)

@@ -194,7 +194,7 @@ static const CFStringRef registered_name_type_prefix = CFSTR("org.winehq.registe
 static unsigned int clipboard_thread_id;
 static HWND clipboard_hwnd;
 static BOOL is_clipboard_owner;
-static macdrv_window clipboard_cocoa_window;
+static WineWindow *clipboard_cocoa_window;
 static unsigned int last_clipboard_update;
 static unsigned int last_get_seqno;
 static WINE_CLIPFORMAT **current_mac_formats;
@@ -1067,6 +1067,7 @@ struct format_entry *get_format_entries(CFTypeRef pasteboard, UINT *entries_size
         }
 
         free(import);
+        CFRelease(data);
     }
 
     CFRelease(types);

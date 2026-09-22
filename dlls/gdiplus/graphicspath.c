@@ -403,7 +403,7 @@ GpStatus WINGDIPAPI GdipAddPathArc(GpPath *path, REAL x, REAL y, REAL width,
 }
 
 /*******************************************************************************
- * GdipAddPathArcI   [GDUPLUS.2]
+ * GdipAddPathArcI   [GDIPLUS.2]
  *
  * See GdipAddPathArc
  */
@@ -2901,7 +2901,7 @@ GpStatus WINGDIPAPI GdipClearPathMarkers(GpPath* path)
 
     count = path->pathdata.Count;
 
-    for(i = 0; i < count - 1; i++){
+    for(i = 0; i < count; i++){
         path->pathdata.Types[i] &= ~PathPointTypePathMarker;
     }
 

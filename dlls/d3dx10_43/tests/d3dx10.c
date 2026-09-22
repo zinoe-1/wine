@@ -25,6 +25,14 @@
 #include <stdint.h>
 #include <assert.h>
 
+static const D3DXMATRIX identity =
+{
+    ._11 = 1.0f,
+    ._22 = 1.0f,
+    ._33 = 1.0f,
+    ._44 = 1.0f,
+};
+
 #define SWAPCHAIN_FLAG_SHADER_INPUT             0x1
 
 struct swapchain_desc
@@ -5047,21 +5055,19 @@ static void test_dxt10_dds_header_image_info(void)
                 D3D10_RESOURCE_DIMENSION_TEXTURE2D
             }
         },
-        /* Resource dimension is validated for cube textures. */
-        {
-            0, 4, 4, 1, (4 * 4), 1, 0, 0,
-            { DXGI_FORMAT_R8G8B8A8_UNORM, D3D10_RESOURCE_DIMENSION_TEXTURE3D, DDS_RESOURCE_MISC_TEXTURECUBE, 2, 0, },
-            (4 * 4 * 4 * 12), { E_FAIL }
-        },
-        /*
-         * 10.
-         * 1D Texture cube, invalid.
-         */
-        {
-            0, 4, 4, 1, (4 * 4), 1, 0, 0,
-            { DXGI_FORMAT_R8G8B8A8_UNORM, D3D10_RESOURCE_DIMENSION_TEXTURE1D, DDS_RESOURCE_MISC_TEXTURECUBE, 2, 0, },
-            (4 * 4 * 4 * 12), { E_FAIL }
-        },
+        /* Resource dimension is not necessarily validated for cube textures,
+         * it sporadically crashes on Windows. */
+        /* { */
+        /*     0, 4, 4, 1, (4 * 4), 1, 0, 0, */
+        /*     { DXGI_FORMAT_R8G8B8A8_UNORM, D3D10_RESOURCE_DIMENSION_TEXTURE3D, DDS_RESOURCE_MISC_TEXTURECUBE, 2, 0, }, */
+        /*     (4 * 4 * 4 * 12), { E_FAIL } */
+        /* }, */
+        /* 1D Texture cube, invalid. */
+        /* { */
+        /*     0, 4, 4, 1, (4 * 4), 1, 0, 0, */
+        /*     { DXGI_FORMAT_R8G8B8A8_UNORM, D3D10_RESOURCE_DIMENSION_TEXTURE1D, DDS_RESOURCE_MISC_TEXTURECUBE, 2, 0, }, */
+        /*     (4 * 4 * 4 * 12), { E_FAIL } */
+        /* }, */
     };
     D3DX10_IMAGE_INFO info;
     unsigned int i;
@@ -6155,41 +6161,33 @@ static void test_dxt_formats(void)
 
 static void test_srgb_filter_flags(void)
 {
+    /*
+     * An input value > 1.0f being converted from SRGB to linear produces
+     * quite a few different values depending on the SDK version, and
+     * sometimes changes run to run. Presumably it's reading beyond the end of
+     * a LUT, values above ~106.0f will cause a crash on all versions and
+     * bitnesses.
+     */
     static const float test_float4_srgb_in[] =
     {
         0.09f, 0.1f,  0.2f, 1.0f,
         0.30f, 0.4f,  0.5f, 2.0f,
         0.60f, 0.7f,  0.8f, 3.0f,
-        0.90f, 1.5f, -1.0f, 4.0f,
+        0.90f, 1.0f, -1.0f, 4.0f,
     };
     static const float test_float4_srgb_in_expected[] =
     {
         5.00732847e-003,  6.27983455e-003, 2.89932229e-002, 1.00000000e+000,
         7.07391128e-002,  1.33206353e-001, 2.17635408e-001, 2.00000000e+000,
         3.25037479e-001,  4.56263810e-001, 6.12064898e-001, 3.00000000e+000,
-        7.93109715e-001, -2.24207754e-044, 1.00000000e+000, 4.00000000e+000,
+        7.93109715e-001,  1.00000000e+000, 1.00000000e+000, 4.00000000e+000,
     };
     static const float test_float4_srgb_in_expected_32[] =
     {
         5.00732893e-003, 6.27983361e-003, 2.89932191e-002, 1.00000000e+000,
         7.07391202e-002, 1.33206338e-001, 2.17635408e-001, 2.00000000e+000,
         3.25037509e-001, 4.56263840e-001, 6.12064838e-001, 3.00000000e+000,
-        /*
-         * On 32-bit d3dx10+, an input value of 1.5f being converted from SRGB
-         * to linear produces quite a few different values depending on the
-         * SDK version. Presumably it's reading beyond the end of a LUT,
-         * values above ~106.0f will cause a crash on all versions and
-         * bitnesses.
-         */
-#if D3DX10_SDK_VERSION < 35
-        7.93109715e-001, 3.48807693e-001, 1.00000000e+000, 4.00000000e+000
-#elif D3DX10_SDK_VERSION < 37
-        7.93109715e-001, 3.56686294e-001, 1.00000000e+000, 4.00000000e+000
-#elif D3DX10_SDK_VERSION < 40
-        7.93109715e-001, 3.64580810e-001, 1.00000000e+000, 4.00000000e+000
-#else
-        7.93109715e-001, 3.33099246e-001, 1.00000000e+000, 4.00000000e+000
-#endif
+        7.93109715e-001, 1.00000000e+000, 1.00000000e+000, 4.00000000e+000
     };
     static const float test_float4_srgb_out[] =
     {
@@ -7835,13 +7833,6 @@ static void test_sprite(void)
     D3DXMATRIX mat, mat2;
     ULONG refcount;
     HRESULT hr;
-    static const D3DXMATRIX identity =
-    {
-        ._11 = 1.0f,
-        ._22 = 1.0f,
-        ._33 = 1.0f,
-        ._44 = 1.0f,
-    };
 
     if (!(device = create_device()))
     {
@@ -7916,12 +7907,18 @@ static void test_sprite(void)
     ok(!memcmp(&mat, &mat2, sizeof(mat)), "Unexpected matrix.\n");
 
     /* View transform */
+    hr = ID3DX10Sprite_GetViewTransform(sprite, NULL);
+    ok(hr == E_FAIL, "Unexpected hr %#lx.\n", hr);
+
+    memset(&mat, 0, sizeof(mat));
+    hr = ID3DX10Sprite_GetViewTransform(sprite, &mat);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(!memcmp(&mat, &identity, sizeof(mat)), "Unexpected view transform.\n");
+
     hr = ID3DX10Sprite_SetViewTransform(sprite, NULL);
-    todo_wine
     ok(hr == E_FAIL, "Unexpected hr %#lx.\n", hr);
 
     hr = ID3DX10Sprite_SetViewTransform(sprite, &mat);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Begin */
@@ -7933,7 +7930,6 @@ static void test_sprite(void)
 
     /* Flush/End */
     hr = ID3DX10Sprite_Flush(sprite);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = ID3DX10Sprite_End(sprite);
@@ -7968,11 +7964,9 @@ static void test_sprite(void)
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = ID3DX10Sprite_Flush(sprite);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = ID3DX10Sprite_Flush(sprite);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = ID3DX10Sprite_End(sprite);
@@ -7991,7 +7985,6 @@ static void test_sprite(void)
     ok(get_refcount(srv1) > refcount, "Unexpected refcount.\n");
 
     hr = ID3DX10Sprite_Flush(sprite);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(get_refcount(srv1) == refcount, "Unexpected refcount.\n");
 
@@ -8009,11 +8002,29 @@ static void test_sprite(void)
 
 static void test_sprite_save_state(void)
 {
+    static const D3D10_INPUT_ELEMENT_DESC layout_desc[] =
+    {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D10_INPUT_PER_VERTEX_DATA, 0},
+    };
+    ID3D10ShaderResourceView *resources[D3D10_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+    ID3D10Buffer *buffers[D3D10_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+    ID3D10SamplerState *samplers[D3D10_COMMONSHADER_SAMPLER_SLOT_COUNT];
+    ID3D10InputLayout *input_layout, *input_layout1, *input_layout2;
+    ID3D10DepthStencilState *ds_state, *tmp_ds_state;
+    ID3D10SamplerState *sampler1, *sampler2;
     ID3D10VertexShader *vs, *vs2, *tmp_vs;
+    ID3D10ShaderResourceView *srv1, *srv2;
+    D3D10_TEXTURE2D_DESC texture_desc;
     D3D10_PRIMITIVE_TOPOLOGY topology;
+    D3D10_DEPTH_STENCIL_DESC ds_desc;
+    D3D10_SAMPLER_DESC sampler_desc;
+    D3D10_BUFFER_DESC buffer_desc;
+    ID3D10Texture2D *texture;
+    ID3D10Buffer *cb1, *cb2;
     ID3DX10Sprite *sprite;
     float blend_factor[4];
     ID3D10Device *device;
+    UINT stencil_ref;
     ULONG refcount;
     HRESULT hr;
 
@@ -8028,6 +8039,78 @@ static void test_sprite_save_state(void)
     hr = ID3D10Device_CreateVertexShader(device, simple_vs, sizeof(simple_vs), &vs2);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
+    memset(&sampler_desc, 0, sizeof(sampler_desc));
+    sampler_desc.Filter = D3D10_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler_desc.AddressU = D3D10_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressV = D3D10_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressW = D3D10_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.MipLODBias = 0.0f;
+    sampler_desc.MaxAnisotropy = 16;
+    sampler_desc.ComparisonFunc = D3D10_COMPARISON_NEVER;
+    sampler_desc.MinLOD = 0.0f;
+    sampler_desc.MaxLOD = 16.0f;
+    hr = ID3D10Device_CreateSamplerState(device, &sampler_desc, &sampler1);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    sampler_desc.MaxLOD = 8.0f;
+    hr = ID3D10Device_CreateSamplerState(device, &sampler_desc, &sampler2);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    buffer_desc.ByteWidth = 16;
+    buffer_desc.Usage = D3D10_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D10_BIND_CONSTANT_BUFFER;
+    buffer_desc.CPUAccessFlags = 0;
+    buffer_desc.MiscFlags = 0;
+    hr = ID3D10Device_CreateBuffer(device, &buffer_desc, NULL, &cb1);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = ID3D10Device_CreateBuffer(device, &buffer_desc, NULL, &cb2);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = ID3D10Device_CreateInputLayout(device, layout_desc, ARRAY_SIZE(layout_desc), simple_vs,
+            sizeof(simple_vs), &input_layout1);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = ID3D10Device_CreateInputLayout(device, layout_desc, ARRAY_SIZE(layout_desc), simple_vs,
+            sizeof(simple_vs), &input_layout2);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    texture_desc.Width = 4;
+    texture_desc.Height = 4;
+    texture_desc.MipLevels = 1;
+    texture_desc.ArraySize = 1;
+    texture_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texture_desc.SampleDesc.Count = 1;
+    texture_desc.SampleDesc.Quality = 0;
+    texture_desc.Usage = D3D10_USAGE_DEFAULT;
+    texture_desc.BindFlags = D3D10_BIND_SHADER_RESOURCE;
+    texture_desc.CPUAccessFlags = 0;
+    texture_desc.MiscFlags = 0;
+
+    hr = ID3D10Device_CreateTexture2D(device, &texture_desc, NULL, &texture);
+    ok(hr == S_OK, "Failed to create texture, hr %#lx.\n", hr);
+
+    hr = ID3D10Device_CreateShaderResourceView(device, (ID3D10Resource *)texture, NULL, &srv1);
+    ok(hr == S_OK, "Failed to create srv, hr %#lx.\n", hr);
+    hr = ID3D10Device_CreateShaderResourceView(device, (ID3D10Resource *)texture, NULL, &srv2);
+    ok(hr == S_OK, "Failed to create srv, hr %#lx.\n", hr);
+    ID3D10Texture2D_Release(texture);
+
+    ds_desc.DepthEnable = TRUE;
+    ds_desc.DepthWriteMask = D3D10_DEPTH_WRITE_MASK_ALL;
+    ds_desc.DepthFunc = D3D10_COMPARISON_LESS;
+    ds_desc.StencilEnable = FALSE;
+    ds_desc.StencilReadMask = D3D10_DEFAULT_STENCIL_READ_MASK;
+    ds_desc.StencilWriteMask = D3D10_DEFAULT_STENCIL_WRITE_MASK;
+    ds_desc.FrontFace.StencilFailOp = D3D10_STENCIL_OP_KEEP;
+    ds_desc.FrontFace.StencilDepthFailOp = D3D10_STENCIL_OP_KEEP;
+    ds_desc.FrontFace.StencilPassOp = D3D10_STENCIL_OP_KEEP;
+    ds_desc.FrontFace.StencilFunc = D3D10_COMPARISON_ALWAYS;
+    ds_desc.BackFace.StencilFailOp = D3D10_STENCIL_OP_KEEP;
+    ds_desc.BackFace.StencilDepthFailOp = D3D10_STENCIL_OP_KEEP;
+    ds_desc.BackFace.StencilPassOp = D3D10_STENCIL_OP_KEEP;
+    ds_desc.BackFace.StencilFunc = D3D10_COMPARISON_ALWAYS;
+
+    hr = ID3D10Device_CreateDepthStencilState(device, &ds_desc, &ds_state);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
     hr = D3DX10CreateSprite(device, 0, &sprite);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -8038,7 +8121,24 @@ static void test_sprite_save_state(void)
     blend_factor[3] = 0.4f;
     ID3D10Device_OMSetBlendState(device, NULL, blend_factor, 0);
     ID3D10Device_IASetPrimitiveTopology(device, D3D10_PRIMITIVE_TOPOLOGY_POINTLIST);
+    ID3D10Device_IASetInputLayout(device, input_layout1);
     ID3D10Device_VSSetShader(device, vs);
+    for (int i = 0; i < ARRAYSIZE(samplers); ++i)
+         samplers[i] = sampler1;
+    ID3D10Device_VSSetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    ID3D10Device_GSSetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    ID3D10Device_PSSetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    for (int i = 0; i < ARRAYSIZE(buffers); ++i)
+         buffers[i] = cb1;
+    ID3D10Device_VSSetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    ID3D10Device_GSSetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    ID3D10Device_PSSetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    for (int i = 0; i < ARRAYSIZE(resources); ++i)
+        resources[i] = srv1;
+    ID3D10Device_VSSetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ID3D10Device_GSSetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ID3D10Device_PSSetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ID3D10Device_OMSetDepthStencilState(device, ds_state, 1);
 
     hr = ID3DX10Sprite_Begin(sprite, D3DX10_SPRITE_SAVE_STATE);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
@@ -8049,7 +8149,24 @@ static void test_sprite_save_state(void)
     blend_factor[3] = 0.8f;
     ID3D10Device_OMSetBlendState(device, NULL, blend_factor, 0);
     ID3D10Device_IASetPrimitiveTopology(device, D3D10_PRIMITIVE_TOPOLOGY_LINELIST);
+    ID3D10Device_IASetInputLayout(device, input_layout2);
     ID3D10Device_VSSetShader(device, vs2);
+    for (int i = 0; i < ARRAYSIZE(samplers); ++i)
+         samplers[i] = sampler2;
+    ID3D10Device_VSSetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    ID3D10Device_GSSetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    ID3D10Device_PSSetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    for (int i = 0; i < ARRAYSIZE(buffers); ++i)
+         buffers[i] = cb2;
+    ID3D10Device_VSSetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    ID3D10Device_GSSetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    ID3D10Device_PSSetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    for (int i = 0; i < ARRAYSIZE(resources); ++i)
+        resources[i] = srv2;
+    ID3D10Device_VSSetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ID3D10Device_GSSetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ID3D10Device_PSSetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ID3D10Device_OMSetDepthStencilState(device, ds_state, 2);
 
     hr = ID3DX10Sprite_End(sprite);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
@@ -8062,12 +8179,124 @@ static void test_sprite_save_state(void)
             blend_factor[0], blend_factor[1], blend_factor[2], blend_factor[3]);
     ID3D10Device_IAGetPrimitiveTopology(device, &topology);
     ok(topology == D3D10_PRIMITIVE_TOPOLOGY_POINTLIST, "Unexpected topology %d.\n", topology);
+    ID3D10Device_IAGetInputLayout(device, &input_layout);
+    ok(input_layout == input_layout1, "Unexpected input layout %p.\n", input_layout);
+    ID3D10InputLayout_Release(input_layout);
     ID3D10Device_VSGetShader(device, &tmp_vs);
     ok(vs == tmp_vs, "Unexpected shader.\n");
     ID3D10VertexShader_Release(tmp_vs);
+    /* Samplers */
+    memset(samplers, 0, sizeof(samplers));
+    ID3D10Device_VSGetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    for (int i = 0; i < ARRAYSIZE(samplers); ++i)
+    {
+        todo_wine
+        ok(samplers[i] == sampler2, "Unexpected sampler %p.\n", samplers[i]);
+        ID3D10SamplerState_Release(samplers[i]);
+    }
+    memset(samplers, 0, sizeof(samplers));
+    ID3D10Device_GSGetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    for (int i = 0; i < ARRAYSIZE(samplers); ++i)
+    {
+        todo_wine
+        ok(samplers[i] == sampler2, "Unexpected sampler %p.\n", samplers[i]);
+        ID3D10SamplerState_Release(samplers[i]);
+    }
+    memset(samplers, 0, sizeof(samplers));
+    ID3D10Device_PSGetSamplers(device, 0, ARRAYSIZE(samplers), samplers);
+    ok(samplers[0] == sampler1, "Unexpected sampler %p.\n", samplers[0]);
+    ID3D10SamplerState_Release(samplers[0]);
+    for (int i = 1; i < ARRAYSIZE(samplers); ++i)
+    {
+        todo_wine
+        ok(samplers[i] == sampler2, "Unexpected sampler %p.\n", samplers[i]);
+        ID3D10SamplerState_Release(samplers[i]);
+    }
+    /* Buffers */
+    memset(buffers, 0, sizeof(buffers));
+    ID3D10Device_VSGetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+#if D3DX10_SDK_VERSION <= 40
+    ok(buffers[0] == cb1, "Unexpected buffer %p.\n", buffers[0]);
+    ID3D10Buffer_Release(buffers[0]);
+    for (int i = 1; i < ARRAYSIZE(buffers); ++i)
+    {
+        todo_wine
+        ok(buffers[i] == cb2, "Unexpected buffer %p.\n", buffers[i]);
+        ID3D10Buffer_Release(buffers[i]);
+    }
+#else
+    for (int i = 0; i < ARRAYSIZE(buffers); ++i)
+    {
+        todo_wine
+        ok(buffers[i] == cb2, "Unexpected buffer %p.\n", buffers[i]);
+        ID3D10Buffer_Release(buffers[i]);
+    }
+#endif
+    memset(buffers, 0, sizeof(buffers));
+    ID3D10Device_GSGetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    ok(buffers[0] == cb1, "Unexpected buffer %p.\n", buffers[0]);
+    ID3D10Buffer_Release(buffers[0]);
+    for (int i = 1; i < ARRAYSIZE(buffers); ++i)
+    {
+        todo_wine
+        ok(buffers[i] == cb2, "Unexpected buffer %p.\n", buffers[i]);
+        ID3D10Buffer_Release(buffers[i]);
+    }
+    memset(buffers, 0, sizeof(buffers));
+    ID3D10Device_PSGetConstantBuffers(device, 0, ARRAYSIZE(buffers), buffers);
+    ok(buffers[0] == cb1, "Unexpected buffer %p.\n", buffers[0]);
+    ID3D10Buffer_Release(buffers[0]);
+    for (int i = 1; i < ARRAYSIZE(buffers); ++i)
+    {
+        todo_wine
+        ok(buffers[i] == cb2, "Unexpected buffer %p.\n", buffers[i]);
+        ID3D10Buffer_Release(buffers[i]);
+    }
+    /* Resources */
+    memset(resources, 0, sizeof(resources));
+    ID3D10Device_VSGetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    for (int i = 0; i < ARRAYSIZE(resources); ++i)
+    {
+        todo_wine
+        ok(resources[i] == srv2, "Unexpected resource %p.\n", resources[i]);
+        ID3D10ShaderResourceView_Release(resources[i]);
+    }
+    memset(resources, 0, sizeof(resources));
+    ID3D10Device_GSGetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    for (int i = 0; i < ARRAYSIZE(resources); ++i)
+    {
+        todo_wine
+        ok(resources[i] == srv2, "Unexpected resource %p.\n", resources[i]);
+        ID3D10ShaderResourceView_Release(resources[i]);
+    }
+    memset(resources, 0, sizeof(resources));
+    ID3D10Device_PSGetShaderResources(device, 0, ARRAYSIZE(resources), resources);
+    ok(resources[0] == srv1, "Unexpected resource %p.\n", resources[0]);
+    ID3D10ShaderResourceView_Release(resources[0]);
+    for (int i = 1; i < ARRAYSIZE(resources); ++i)
+    {
+        todo_wine
+        ok(resources[i] == srv2, "Unexpected resource %p.\n", resources[i]);
+        ID3D10ShaderResourceView_Release(resources[i]);
+    }
+    /* Depth stencil */
+    ID3D10Device_OMGetDepthStencilState(device, &tmp_ds_state, &stencil_ref);
+    ok(tmp_ds_state == ds_state, "Unexpected depth stencil.\n");
+    todo_wine
+    ok(stencil_ref == 2, "Unexpected stencil reference %u.\n", stencil_ref);
+    ID3D10DepthStencilState_Release(tmp_ds_state);
 
     ID3DX10Sprite_Release(sprite);
 
+    ID3D10DepthStencilState_Release(ds_state);
+    ID3D10ShaderResourceView_Release(srv1);
+    ID3D10ShaderResourceView_Release(srv2);
+    ID3D10InputLayout_Release(input_layout1);
+    ID3D10InputLayout_Release(input_layout2);
+    ID3D10Buffer_Release(cb1);
+    ID3D10Buffer_Release(cb2);
+    ID3D10SamplerState_Release(sampler2);
+    ID3D10SamplerState_Release(sampler1);
     ID3D10VertexShader_Release(vs2);
     ID3D10VertexShader_Release(vs);
     refcount = ID3D10Device_Release(device);
@@ -8172,27 +8401,142 @@ static void test_sprite_render(void)
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = ID3DX10Sprite_Flush(sprite);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     hr = ID3DX10Sprite_End(sprite);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     color = get_texture_color(test_context.backbuffer, 160, 120);
-    todo_wine
     ok(compare_color(color, 0xff0000ff, 0), "Got unexpected color 0x%08x.\n", color);
     color = get_texture_color(test_context.backbuffer, 480, 120);
-    todo_wine
     ok(compare_color(color, 0xffff00ff, 0), "Got unexpected color 0x%08x.\n", color);
     color = get_texture_color(test_context.backbuffer, 160, 360);
-    todo_wine
     ok(compare_color(color, 0xffff0000, 0), "Got unexpected color 0x%08x.\n", color);
     color = get_texture_color(test_context.backbuffer, 480, 360);
-    todo_wine
     ok(compare_color(color, 0xff00ffff, 0), "Got unexpected color 0x%08x.\n", color);
 
-    ID3DX10Sprite_Release(sprite);
+    /* Immediate draws with sprites in the batch */
+    ID3D10Device_ClearRenderTargetView(device, test_context.backbuffer_rtv, clear);
+
+    hr = ID3DX10Sprite_Begin(sprite, 0);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    color = get_texture_color(test_context.backbuffer, 160, 120);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 120);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 160, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+
+    D3DXMatrixTranslation(&sprite_desc.matWorld, -0.5f, 0.5f, 0.0f);
+    sprite_desc.TexCoord.x = 0.0f;
+    sprite_desc.TexCoord.y = 0.0f;
+    sprite_desc.TexSize.x = 0.25f;
+    sprite_desc.TexSize.y = 0.25f;
+    hr = ID3DX10Sprite_DrawSpritesBuffered(sprite, &sprite_desc, 1);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    color = get_texture_color(test_context.backbuffer, 160, 120);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 120);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 160, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+
+    D3DXMatrixTranslation(&sprite_desc.matWorld, 0.5f, 0.5f, 0.0f);
+    sprite_desc.TexCoord.x = 0.7f;
+    sprite_desc.TexCoord.y = 0.0f;
+    sprite_desc.TexSize.x = 0.25f;
+    sprite_desc.TexSize.y = 0.25f;
+    hr = ID3DX10Sprite_DrawSpritesImmediate(sprite, &sprite_desc, 1, sizeof(sprite_desc), 0);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    color = get_texture_color(test_context.backbuffer, 160, 120);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 120);
+    ok(compare_color(color, 0xffff00ff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 160, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+
+    hr = ID3DX10Sprite_End(sprite);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    color = get_texture_color(test_context.backbuffer, 160, 120);
+    ok(compare_color(color, 0xff0000ff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 120);
+    ok(compare_color(color, 0xffff00ff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 160, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+
+    /* Immediate drawing does not require to be called within Begin-End */
+    ID3D10Device_ClearRenderTargetView(device, test_context.backbuffer_rtv, clear);
+
+    D3DXMatrixTranslation(&sprite_desc.matWorld, 0.5f, 0.5f, 0.0f);
+    sprite_desc.TexCoord.x = 0.7f;
+    sprite_desc.TexCoord.y = 0.0f;
+    sprite_desc.TexSize.x = 0.25f;
+    sprite_desc.TexSize.y = 0.25f;
+    hr = ID3DX10Sprite_DrawSpritesImmediate(sprite, &sprite_desc, 1, sizeof(sprite_desc), 0);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    color = get_texture_color(test_context.backbuffer, 160, 120);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 120);
+    ok(compare_color(color, 0xffff00ff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 160, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 480, 360);
+    ok(compare_color(color, 0xffffffff, 0), "Got unexpected color 0x%08x.\n", color);
+
     ID3D10Texture2D_Release(texture);
     ID3D10ShaderResourceView_Release(srv);
+
+    /* Testing sampler filtering mode */
+    texture_desc.Width = 16;
+    texture_desc.Height = 16;
+
+    resource_data.pSysMem = a8r8g8b8_16_16;
+    resource_data.SysMemPitch = texture_desc.Width * 4;
+    resource_data.SysMemSlicePitch = 0;
+    hr = ID3D10Device_CreateTexture2D(device, &texture_desc, &resource_data, &texture);
+    ok(hr == S_OK, "Failed to create texture, hr %#lx.\n", hr);
+
+    hr = ID3D10Device_CreateShaderResourceView(device, (ID3D10Resource *)texture, NULL, &srv);
+    ok(hr == S_OK, "Failed to create srv, hr %#lx.\n", hr);
+
+    ID3D10Device_ClearRenderTargetView(device, test_context.backbuffer_rtv, clear);
+
+    sprite_desc.TexCoord.x = 0.0f;
+    sprite_desc.TexCoord.y = 0.0f;
+    sprite_desc.TexSize.x = 1.0f;
+    sprite_desc.TexSize.y = 1.0f;
+    sprite_desc.pTexture = srv;
+    sprite_desc.matWorld = identity;
+
+    hr = ID3DX10Sprite_Begin(sprite, 0);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = ID3DX10Sprite_DrawSpritesImmediate(sprite, &sprite_desc, 1, 0, 0);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = ID3DX10Sprite_End(sprite);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    color = get_texture_color(test_context.backbuffer, 320, 235);
+    ok(compare_color(color, 0x7b7b7b7b, 1), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 320, 240);
+    ok(compare_color(color, 0x80808080, 1), "Got unexpected color 0x%08x.\n", color);
+    color = get_texture_color(test_context.backbuffer, 320, 245);
+    ok(compare_color(color, 0x85858585, 1), "Got unexpected color 0x%08x.\n", color);
+
+    ID3D10Texture2D_Release(texture);
+    ID3D10ShaderResourceView_Release(srv);
+    ID3DX10Sprite_Release(sprite);
     release_test_context(&test_context);
 }
 

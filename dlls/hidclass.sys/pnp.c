@@ -218,7 +218,6 @@ static NTSTATUS get_hid_device_desc( minidriver *minidriver, DEVICE_OBJECT *devi
 static NTSTATUS initialize_device( minidriver *minidriver, DEVICE_OBJECT *device )
 {
     struct func_device *fdo = fdo_from_DEVICE_OBJECT( device );
-    ULONG index = HID_STRING_ID_ISERIALNUMBER;
     IO_STATUS_BLOCK io;
     NTSTATUS status;
 
@@ -227,14 +226,6 @@ static NTSTATUS initialize_device( minidriver *minidriver, DEVICE_OBJECT *device
     if (io.Status != STATUS_SUCCESS)
     {
         ERR( "Minidriver failed to get attributes, status %#lx.\n", io.Status );
-        return io.Status;
-    }
-
-    call_minidriver( IOCTL_HID_GET_STRING, device, ULongToPtr(index), sizeof(index),
-                     &fdo->serial, sizeof(fdo->serial), &io );
-    if (io.Status != STATUS_SUCCESS)
-    {
-        ERR( "Minidriver failed to get serial number, status %#lx.\n", io.Status );
         return io.Status;
     }
 
@@ -288,14 +279,12 @@ static NTSTATUS create_child_pdos( minidriver *minidriver, DEVICE_OBJECT *device
         {
             swprintf( pdo->base.device_id, ARRAY_SIZE(pdo->base.device_id), L"%s&Col%02d",
                       fdo->base.device_id, pdo->collection_desc->CollectionNumber );
-            swprintf( pdo->base.instance_id, ARRAY_SIZE(pdo->base.instance_id), L"%u&%s&%x&%u&%04u",
-                      fdo->attrs.VersionNumber, fdo->serial, 0, 0, i );
         }
         else
         {
             wcscpy( pdo->base.device_id, fdo->base.device_id );
-            wcscpy( pdo->base.instance_id, fdo->base.instance_id );
         }
+        swprintf( pdo->base.instance_id, ARRAY_SIZE(pdo->base.instance_id), L"%04u", i );
         wcscpy( pdo->base.container_id, fdo->base.container_id );
         pdo->base.class_guid = fdo->base.class_guid;
 
@@ -549,6 +538,8 @@ static NTSTATUS pdo_pnp( DEVICE_OBJECT *device, IRP *irp )
             DEVICE_CAPABILITIES *caps = irpsp->Parameters.DeviceCapabilities.Capabilities;
 
             caps->RawDeviceOK = 1;
+            caps->UniqueID = 0;
+            caps->Removable = 0;
             status = STATUS_SUCCESS;
             break;
         }
