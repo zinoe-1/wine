@@ -1,6 +1,7 @@
 MODULE    = wpnapps.dll
-IMPORTLIB = wpnapps
 IMPORTS   = combase
 
 SOURCES = \
-	main.c
+	classes.idl \
+	main.c \
+	toast_notification.c

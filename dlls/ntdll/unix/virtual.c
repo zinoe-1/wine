@@ -93,22 +93,13 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(virtual);
 WINE_DECLARE_DEBUG_CHANNEL(module);
-WINE_DECLARE_DEBUG_CHANNEL(virtual_ranges);
+WINE_DECLARE_DEBUG_CHANNEL(mem_areas);
 
 struct preload_info
 {
     void  *addr;
     size_t size;
 };
-
-struct reserved_area
-{
-    struct list entry;
-    void       *base;
-    size_t      size;
-};
-
-static struct list reserved_areas = LIST_INIT(reserved_areas);
 
 struct builtin_module
 {
@@ -212,10 +203,20 @@ static struct list teb_list = LIST_INIT( teb_list );
 #define ROUND_SIZE(addr,size,mask) (((SIZE_T)(size) + ((UINT_PTR)(addr) & (mask)) + (mask)) & ~(UINT_PTR)(mask))
 
 #define VIRTUAL_DEBUG_DUMP_VIEW(view) do { if (TRACE_ON(virtual)) dump_view(view); } while (0)
-#define VIRTUAL_DEBUG_DUMP_RANGES() do { if (TRACE_ON(virtual_ranges)) dump_free_ranges(); } while (0)
 
 #ifndef MAP_NORESERVE
 #define MAP_NORESERVE 0
+#endif
+
+#undef MAP_FIXED_NOREPLACE
+#ifndef MAP_FIXED_NOREPLACE
+# ifdef linux
+#  define MAP_FIXED_NOREPLACE 0x100000
+# elif defined MAP_TRYFIXED
+#  define MAP_FIXED_NOREPLACE MAP_TRYFIXED
+# else
+#  define MAP_FIXED_NOREPLACE 0
+# endif
 #endif
 
 #ifdef _WIN64  /* on 64-bit the page protection bytes use a 2-level table */
@@ -237,14 +238,18 @@ static const size_t view_block_size = 0x100000;
 static BOOL force_exec_prot;  /* whether to force PROT_EXEC on all PROT_READ mmaps */
 static BOOL enable_write_exceptions;  /* raise exception on writes to executable memory */
 
-struct range_entry
-{
-    void *base;
-    void *end;
-};
+static UINT_PTR *mem_areas;
+static const UINT_PTR initial_mem_areas[] = { 0, ~(UINT_PTR)0 };
+static unsigned int mem_areas_size = 0x1000 << sizeof(void*);
+static unsigned int mem_areas_count = ARRAY_SIZE(initial_mem_areas);
 
-static struct range_entry *free_ranges;
-static struct range_entry *free_ranges_end;
+enum area_state
+{
+    AREA_FREE,      /* free (but may have been allocated by host) */
+    AREA_RESERVED,  /* reserved, available for allocations */
+    AREA_BLOCKED,   /* reserved, but blocked for allocations */
+    AREA_ALLOCATED, /* reserved and allocated to a view */
+};
 
 
 static inline BOOL is_beyond_limit( const void *addr, size_t size, const void *limit )
@@ -279,6 +284,91 @@ void *anon_mmap_alloc( size_t size, int prot )
     assert( !(size & host_page_mask) );
 
     return mmap( NULL, size, prot, MAP_PRIVATE | MAP_ANON, -1, 0 );
+}
+
+static inline UINT_PTR make_mem_area( void *base, enum area_state state )
+{
+    return (UINT_PTR)base | state;
+}
+
+static inline void *mem_area_base( unsigned int pos )
+{
+    return (void *)(mem_areas[pos] & ~(UINT_PTR)0xff);
+}
+
+static inline void *mem_area_end( unsigned int pos )
+{
+    return mem_area_base( pos + 1 );
+}
+
+static inline enum area_state mem_area_state( unsigned int pos )
+{
+    return mem_areas[pos] & 0xff;
+}
+
+/* find the mem area containing the address */
+static unsigned int find_mem_area( void *addr )
+{
+    int min = 0, max = mem_areas_count - 1;
+    while (min <= max)
+    {
+        int pos = (min + max) / 2;
+        if (mem_area_base( pos ) > addr) max = pos - 1;
+        else if (mem_area_base( pos ) < addr) min = pos + 1;
+        else return pos;
+    }
+    return max;
+}
+
+/* helper for set_mem_area_state */
+static void move_mem_areas( unsigned int dst, unsigned int src )
+{
+    int diff = dst - src;
+
+    assert( mem_areas_count + diff <= mem_areas_size );
+    if (!diff) return;
+    memmove( &mem_areas[dst], &mem_areas[src], (mem_areas_count - src) * sizeof(mem_areas[0]) );
+    mem_areas_count += diff;
+}
+
+/* set the mem area state for the specified address range */
+static void set_mem_area_state( void *addr, SIZE_T size, enum area_state state )
+{
+    void *end = (char *)addr + size;
+    unsigned int start_pos, end_pos;
+
+    assert( !((UINT_PTR)addr & granularity_mask) );
+    assert( !(size & granularity_mask) );
+    if (!end) end = (void *)~granularity_mask;  /* avoid wrap-around */
+
+    start_pos = end_pos = find_mem_area( addr );
+    while (end >= mem_area_base( end_pos + 1 )) end_pos++;
+
+    if (mem_area_state( start_pos ) == state)
+    {
+        if (start_pos == end_pos) return;  /* nothing to do */
+        addr = mem_area_base( start_pos );
+    }
+    else if (start_pos && mem_area_state( start_pos - 1 ) == state)
+    {
+        if (addr == mem_area_base( start_pos )) addr = mem_area_base( --start_pos );  /* merge with prev */
+    }
+    if (mem_area_state( end_pos ) == state) end = mem_area_base( ++end_pos );  /* merge with next */
+    if (addr == mem_area_base( start_pos )) start_pos--;  /* reuse prev */
+
+    move_mem_areas( start_pos + 2, end_pos );
+    mem_areas[start_pos + 1] = make_mem_area( addr, state );
+    mem_areas[start_pos + 2] = make_mem_area( end, mem_area_state( start_pos + 2 ) );
+}
+
+static void dump_mem_areas(void)
+{
+    static const char *states[] = { "free", "reserved", "blocked", "allocated" };
+
+    TRACE_(mem_areas)( "%u memory areas:\n", mem_areas_count );
+    for (UINT i = 0; i < mem_areas_count - 1; i++)
+        TRACE_(mem_areas)( "    %p-%p: %s\n",
+                           mem_area_base( i ), mem_area_base( i + 1 ), states[mem_area_state(i)] );
 }
 
 #ifdef USE_UFFD_WRITEWATCH
@@ -436,146 +526,45 @@ static void kernel_get_write_watches( void *base, SIZE_T size, void **buffer, UL
 }
 #endif
 
-static void mmap_add_reserved_area( void *addr, SIZE_T size )
+static void mem_area_add_view( struct file_view *view )
 {
-    struct reserved_area *area;
-    struct list *ptr, *next;
-    void *end, *area_end;
+    size_t size = ROUND_SIZE( view->base, view->size, granularity_mask );
+    void *base = ROUND_ADDR( view->base, granularity_mask );
+    void *end = (char *)base + size;
+    unsigned int area = find_mem_area( base );
 
-    assert( !((UINT_PTR)addr & granularity_mask) );
-    assert( !(size & granularity_mask) );
-
-    if (!((intptr_t)addr + size)) size -= granularity_mask + 1;  /* avoid wrap-around */
-    end = (char *)addr + size;
-
-    LIST_FOR_EACH( ptr, &reserved_areas )
-    {
-        area = LIST_ENTRY( ptr, struct reserved_area, entry );
-        area_end = (char *)area->base + area->size;
-
-        if (area->base > end) break;
-        if (area_end < addr) continue;
-        if (area->base > addr)
-        {
-            area->size += (char *)area->base - (char *)addr;
-            area->base = addr;
-        }
-        if (area_end >= end) return;
-
-        /* try to merge with the following ones */
-        while ((next = list_next( &reserved_areas, ptr )))
-        {
-            struct reserved_area *area_next = LIST_ENTRY( next, struct reserved_area, entry );
-            void *next_end = (char *)area_next->base + area_next->size;
-
-            if (area_next->base > end) break;
-            list_remove( next );
-            free( area_next );
-            if (next_end >= end)
-            {
-                end = next_end;
-                break;
-            }
-        }
-        area->size = (char *)end - (char *)area->base;
-        return;
-    }
-
-    if ((area = malloc( sizeof(*area) )))
-    {
-        area->base = addr;
-        area->size = size;
-        list_add_before( ptr, &area->entry );
-    }
+    if (mem_area_end( area ) >= end && mem_area_state( area ) == AREA_FREE) return;
+    set_mem_area_state( base, size, AREA_ALLOCATED );
 }
 
-static void mmap_remove_reserved_area( void *addr, SIZE_T size )
+static void mem_area_remove_view( struct file_view *view )
 {
-    struct reserved_area *area;
-    struct list *ptr;
+    struct file_view *prev, *next;
+    void *base = ROUND_ADDR( view->base, granularity_mask );
+    void *end = (char *)base + ROUND_SIZE( view->base, view->size, granularity_mask );
+    unsigned int area = find_mem_area( base );
 
-    assert( !((UINT_PTR)addr & granularity_mask) );
-    assert( !(size & granularity_mask) );
+    if (mem_area_state( area ) == AREA_FREE) return;
 
-    if (!((intptr_t)addr + size)) size -= granularity_mask + 1;  /* avoid wrap-around */
-
-    ptr = list_head( &reserved_areas );
-    /* find the first area covering address */
-    while (ptr)
+    if ((prev = RB_ENTRY_VALUE( rb_prev( &view->entry ), struct file_view, entry )))
     {
-        area = LIST_ENTRY( ptr, struct reserved_area, entry );
-        if ((char *)area->base >= (char *)addr + size) break;  /* outside the range */
-        if ((char *)area->base + area->size > (char *)addr)  /* overlaps range */
-        {
-            if (area->base >= addr)
-            {
-                if ((char *)area->base + area->size > (char *)addr + size)
-                {
-                    /* range overlaps beginning of area only -> shrink area */
-                    area->size -= (char *)addr + size - (char *)area->base;
-                    area->base = (char *)addr + size;
-                    break;
-                }
-                else
-                {
-                    /* range contains the whole area -> remove area completely */
-                    ptr = list_next( &reserved_areas, ptr );
-                    list_remove( &area->entry );
-                    free( area );
-                    continue;
-                }
-            }
-            else
-            {
-                if ((char *)area->base + area->size > (char *)addr + size)
-                {
-                    /* range is in the middle of area -> split area in two */
-                    struct reserved_area *new_area = malloc( sizeof(*new_area) );
-                    if (new_area)
-                    {
-                        new_area->base = (char *)addr + size;
-                        new_area->size = (char *)area->base + area->size - (char *)new_area->base;
-                        list_add_after( ptr, &new_area->entry );
-                    }
-                    area->size = (char *)addr - (char *)area->base;
-                    break;
-                }
-                else
-                {
-                    /* range overlaps end of area only -> shrink area */
-                    area->size = (char *)addr - (char *)area->base;
-                }
-            }
-        }
-        ptr = list_next( &reserved_areas, ptr );
+        void *prev_base = ROUND_ADDR( prev->base, granularity_mask );
+        void *prev_end = (char *)prev_base + ROUND_SIZE( prev->base, prev->size, granularity_mask );
+        if (prev_end > base) base = prev_end;
     }
-}
-
-static int mmap_is_in_reserved_area( void *addr, SIZE_T size )
-{
-    struct reserved_area *area;
-
-    LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+    if ((next = RB_ENTRY_VALUE( rb_next( &view->entry ), struct file_view, entry )))
     {
-        if ((char *)area->base > (char *)addr + size) break;
-        if ((char *)area->base + area->size <= (char *)addr) continue;
-        /* area must contain block completely */
-        if (area->base > addr) return -1;
-        if ((char *)area->base + area->size < (char *)addr + size) return -1;
-        return 1;
+        void *next_base = ROUND_ADDR( next->base, granularity_mask );
+        if (next_base < end) end = next_base;
     }
-    return 0;
+    if (base < end) set_mem_area_state( base, (char *)end - (char *)base, AREA_RESERVED );
 }
 
 static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
 {
     void *ptr;
 
-#ifdef MAP_FIXED_NOREPLACE
-    ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
-#elif defined(MAP_TRYFIXED)
-    ptr = mmap( start, size, prot, MAP_TRYFIXED | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
-#elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
     ptr = mmap( start, size, prot, MAP_FIXED | MAP_EXCL | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
     if (ptr == MAP_FAILED && errno == EINVAL) errno = EEXIST;
 #elif defined(__APPLE__)
@@ -594,7 +583,7 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
         ptr = MAP_FAILED;
     }
 #else
-    ptr = mmap( start, size, prot, MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
+    ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
 #endif
     if (ptr != MAP_FAILED && ptr != start)
     {
@@ -607,6 +596,8 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
 
 static void reserve_area( void *addr, void *end )
 {
+    /* use a larger alignment for 64-bit space, we don't need to reserve every single block */
+    size_t align_mask = ((ULONGLONG)(UINT_PTR)addr >> 32) ? 0xffffff : granularity_mask;
 #ifdef __APPLE__
     mach_vm_address_t address = (mach_vm_address_t)addr;
     mach_vm_address_t end_address = (mach_vm_address_t)end;
@@ -633,14 +624,14 @@ static void reserve_area( void *addr, void *end )
         if (end_address < address)
             address = end_address;
 
-        if (hole_address < address && (hole_size = (address - hole_address) & ~granularity_mask))
+        if (hole_address < address && (hole_size = (address - hole_address) & ~align_mask))
         {
             /* found a hole, attempt to reserve it. */
             mach_vm_address_t alloc_address = hole_address;
 
             ret = mach_vm_map( mach_task_self(), &alloc_address, hole_size, 0, VM_FLAGS_FIXED,
                                MEMORY_OBJECT_NULL, 0, 0, PROT_NONE, VM_PROT_ALL, VM_INHERIT_COPY );
-            if (!ret) mmap_add_reserved_area( (void*)hole_address, hole_size );
+            if (!ret) set_mem_area_state( (void*)hole_address, hole_size, AREA_RESERVED );
             else if (ret == KERN_NO_SPACE)
             {
                 /* something filled (part of) the hole before we could.
@@ -649,19 +640,20 @@ static void reserve_area( void *addr, void *end )
                 continue;
             }
         }
-        address = (address + size + granularity_mask) & ~granularity_mask;
+        address = (address + size + align_mask) & ~align_mask;
     }
 #else
     size_t size = (char *)end - (char *)addr;
 
     if (!size) return;
+    if (addr >= host_addr_space_limit) return;
 
     if (anon_mmap_tryfixed( addr, size, PROT_NONE, MAP_NORESERVE ) != MAP_FAILED)
     {
-        mmap_add_reserved_area( addr, size );
+        set_mem_area_state( addr, size, AREA_RESERVED );
         return;
     }
-    size = (size / 2) & ~granularity_mask;
+    size = (size / 2) & ~align_mask;
     if (size)
     {
         reserve_area( addr, (char *)addr + size );
@@ -669,61 +661,6 @@ static void reserve_area( void *addr, void *end )
     }
 #endif /* __APPLE__ */
 }
-
-
-static void mmap_init( const struct preload_info *preload_info )
-{
-#ifndef _WIN64
-#ifndef __APPLE__
-    char stack;
-    char * const stack_ptr = &stack;
-#endif
-    char *user_space_limit = (char *)0x7ffe0000;
-    int i;
-
-    if (preload_info)
-    {
-        /* check for a reserved area starting at the user space limit */
-        /* to avoid wasting time trying to allocate it again */
-        for (i = 0; preload_info[i].size; i++)
-        {
-            if ((char *)preload_info[i].addr > user_space_limit) break;
-            if ((char *)preload_info[i].addr + preload_info[i].size > user_space_limit)
-            {
-                user_space_limit = (char *)preload_info[i].addr + preload_info[i].size;
-                break;
-            }
-        }
-    }
-    else reserve_area( (void *)0x00010000, (void *)0x40000000 );
-
-
-#ifndef __APPLE__
-    if (stack_ptr >= user_space_limit)
-    {
-        char *end = 0;
-        char *base = stack_ptr - ((unsigned int)stack_ptr & granularity_mask) - (granularity_mask + 1);
-        if (base > user_space_limit) reserve_area( user_space_limit, base );
-        base = stack_ptr - ((unsigned int)stack_ptr & granularity_mask) + (granularity_mask + 1);
-#if defined(linux) || defined(__FreeBSD__) || defined (__FreeBSD_kernel__) || defined(__DragonFly__)
-        /* Heuristic: assume the stack is near the end of the address */
-        /* space, this avoids a lot of futile allocation attempts */
-        end = (char *)(((unsigned long)base + 0x0fffffff) & 0xf0000000);
-#endif
-        reserve_area( base, end );
-    }
-    else
-#endif
-        reserve_area( user_space_limit, 0 );
-
-#else
-    reserve_area( (void *)0x7ffff0000000, (void *)0x7ffffe000000 ); /* top-down area */
-    if (preload_info) return;
-    reserve_area( (void *)0x000000010000, (void *)0x000068000000 );
-    reserve_area( (void *)0x00007f000000, (void *)0x00007fff0000 );
-#endif
-}
-
 
 /***********************************************************************
  *           get_wow_user_space_limit
@@ -860,187 +797,6 @@ NTSTATUS set_builtin_unixlib_name( void *module, const char *name )
     }
     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
     return status;
-}
-
-
-/***********************************************************************
- *           free_ranges_lower_bound
- *
- * Returns the first range whose end is not less than addr, or end if there's none.
- */
-static struct range_entry *free_ranges_lower_bound( void *addr )
-{
-    struct range_entry *begin = free_ranges;
-    struct range_entry *end = free_ranges_end;
-    struct range_entry *mid;
-
-    while (begin < end)
-    {
-        mid = begin + (end - begin) / 2;
-        if (mid->end < addr)
-            begin = mid + 1;
-        else
-            end = mid;
-    }
-
-    return begin;
-}
-
-static void dump_free_ranges(void)
-{
-    struct range_entry *r;
-    for (r = free_ranges; r != free_ranges_end; ++r)
-        TRACE_(virtual_ranges)("%p - %p.\n", r->base, r->end);
-}
-
-/***********************************************************************
- *           free_ranges_insert_view
- *
- * Updates the free_ranges after a new view has been created.
- */
-static void free_ranges_insert_view( struct file_view *view )
-{
-    void *view_base = ROUND_ADDR( view->base, granularity_mask );
-    void *view_end = ROUND_ADDR( (char *)view->base + view->size + granularity_mask, granularity_mask );
-    struct range_entry *range = free_ranges_lower_bound( view_base );
-    struct range_entry *next = range + 1;
-
-    /* free_ranges initial value is such that the view is either inside range or before another one. */
-    assert( range != free_ranges_end );
-    assert( range->end > view_base || next != free_ranges_end );
-
-    /* Free ranges addresses are aligned at granularity_mask while the views may be not. */
-
-    if (range->base > view_base)
-        view_base = range->base;
-    if (range->end < view_end)
-        view_end = range->end;
-    if (range->end == view_base && next->base >= view_end)
-        view_end = view_base;
-
-    TRACE_(virtual_ranges)( "%p - %p, aligned %p - %p.\n",
-                            view->base, (char *)view->base + view->size, view_base, view_end );
-
-    if (view_end <= view_base)
-    {
-        VIRTUAL_DEBUG_DUMP_RANGES();
-        return;
-    }
-
-    /* this should never happen */
-    if (range->base > view_base || range->end < view_end)
-        ERR( "range %p - %p is already partially mapped\n", view_base, view_end );
-    assert( range->base <= view_base && range->end >= view_end );
-
-    /* need to split the range in two */
-    if (range->base < view_base && range->end > view_end)
-    {
-        memmove( next + 1, next, (free_ranges_end - next) * sizeof(struct range_entry) );
-        free_ranges_end += 1;
-        if ((char *)free_ranges_end - (char *)free_ranges > view_block_size)
-            ERR( "Free range sequence is full, trouble ahead!\n" );
-        assert( (char *)free_ranges_end - (char *)free_ranges <= view_block_size );
-
-        next->base = view_end;
-        next->end = range->end;
-        range->end = view_base;
-    }
-    else
-    {
-        /* otherwise we just have to shrink it */
-        if (range->base < view_base)
-            range->end = view_base;
-        else
-            range->base = view_end;
-
-        if (range->base < range->end)
-        {
-            VIRTUAL_DEBUG_DUMP_RANGES();
-            return;
-        }
-        /* and possibly remove it if it's now empty */
-        memmove( range, next, (free_ranges_end - next) * sizeof(struct range_entry) );
-        free_ranges_end -= 1;
-        assert( free_ranges_end - free_ranges > 0 );
-    }
-    VIRTUAL_DEBUG_DUMP_RANGES();
-}
-
-/***********************************************************************
- *           free_ranges_remove_view
- *
- * Updates the free_ranges after a view has been destroyed.
- */
-static void free_ranges_remove_view( struct file_view *view )
-{
-    void *view_base = ROUND_ADDR( view->base, granularity_mask );
-    void *view_end = ROUND_ADDR( (char *)view->base + view->size + granularity_mask, granularity_mask );
-    struct range_entry *range = free_ranges_lower_bound( view_base );
-    struct range_entry *next = range + 1;
-
-    /* Free ranges addresses are aligned at granularity_mask while the views may be not. */
-    struct file_view *prev_view = RB_ENTRY_VALUE( rb_prev( &view->entry ), struct file_view, entry );
-    struct file_view *next_view = RB_ENTRY_VALUE( rb_next( &view->entry ), struct file_view, entry );
-    void *prev_view_base = prev_view ? ROUND_ADDR( prev_view->base, granularity_mask ) : NULL;
-    void *prev_view_end = prev_view ? ROUND_ADDR( (char *)prev_view->base + prev_view->size + granularity_mask, granularity_mask ) : NULL;
-    void *next_view_base = next_view ? ROUND_ADDR( next_view->base, granularity_mask ) : NULL;
-    void *next_view_end = next_view ? ROUND_ADDR( (char *)next_view->base + next_view->size + granularity_mask, granularity_mask ) : NULL;
-
-    if (prev_view_end && prev_view_end > view_base && prev_view_base < view_end)
-        view_base = prev_view_end;
-    if (next_view_base && next_view_base < view_end && next_view_end > view_base)
-        view_end = next_view_base;
-
-    TRACE_(virtual_ranges)( "%p - %p, aligned %p - %p.\n",
-                            view->base, (char *)view->base + view->size, view_base, view_end );
-
-    if (view_end <= view_base)
-    {
-        VIRTUAL_DEBUG_DUMP_RANGES();
-        return;
-    }
-    /* free_ranges initial value is such that the view is either inside range or before another one. */
-    assert( range != free_ranges_end );
-    assert( range->end > view_base || next != free_ranges_end );
-
-    /* this should never happen, but we can safely ignore it */
-    if (range->base <= view_base && range->end >= view_end)
-    {
-        WARN( "range %p - %p is already unmapped\n", view_base, view_end );
-        return;
-    }
-
-    /* this should never happen */
-    if (range->base < view_end && range->end > view_base)
-        ERR( "range %p - %p is already partially unmapped\n", view_base, view_end );
-    assert( range->end <= view_base || range->base >= view_end );
-
-    /* merge with next if possible */
-    if (range->end == view_base && next->base == view_end)
-    {
-        range->end = next->end;
-        memmove( next, next + 1, (free_ranges_end - next - 1) * sizeof(struct range_entry) );
-        free_ranges_end -= 1;
-        assert( free_ranges_end - free_ranges > 0 );
-    }
-    /* or try growing the range */
-    else if (range->end == view_base)
-        range->end = view_end;
-    else if (range->base == view_end)
-        range->base = view_base;
-    /* otherwise create a new one */
-    else
-    {
-        memmove( range + 1, range, (free_ranges_end - range) * sizeof(struct range_entry) );
-        free_ranges_end += 1;
-        if ((char *)free_ranges_end - (char *)free_ranges > view_block_size)
-            ERR( "Free range sequence is full, trouble ahead!\n" );
-        assert( (char *)free_ranges_end - (char *)free_ranges <= view_block_size );
-
-        range->base = view_base;
-        range->end = view_end;
-    }
-    VIRTUAL_DEBUG_DUMP_RANGES();
 }
 
 
@@ -1380,6 +1136,8 @@ static void dump_view( struct file_view *view )
     if (count)
         TRACE( "      %p - %p %s\n",
                  addr, addr + (count << page_shift) - 1, get_prot_str(prot) );
+
+    if (TRACE_ON(mem_areas)) dump_mem_areas();
 }
 
 
@@ -1588,116 +1346,44 @@ static void *map_free_area( void *base, void *end, size_t size, int top_down, in
     return start;
 }
 
-
-/***********************************************************************
- *           find_reserved_free_area
- *
- * Find a free area between views inside the specified range.
- * virtual_mutex must be held by caller.
- * The range must be inside a reserved area.
- */
-static void *find_reserved_free_area( void *base, void *end, size_t size, int top_down, size_t align_mask )
-{
-    struct range_entry *range;
-    void *start;
-
-    base = ROUND_ADDR( (char *)base + align_mask, align_mask );
-    end = (char *)ROUND_ADDR( (char *)end - size, align_mask ) + size;
-
-    if (top_down)
-    {
-        start = (char *)end - size;
-        range = free_ranges_lower_bound( start );
-        assert(range != free_ranges_end && range->end >= start);
-
-        if ((char *)range->end - (char *)start < size) start = ROUND_ADDR( (char *)range->end - size, align_mask );
-        do
-        {
-            if (start >= end || start < base || (char *)end - (char *)start < size) return NULL;
-            if (start < range->end && start >= range->base && (char *)range->end - (char *)start >= size) break;
-            if (--range < free_ranges) return NULL;
-            start = ROUND_ADDR( (char *)range->end - size, align_mask );
-        }
-        while (1);
-    }
-    else
-    {
-        start = base;
-        range = free_ranges_lower_bound( start );
-        assert(range != free_ranges_end && range->end >= start);
-
-        if (start < range->base) start = ROUND_ADDR( (char *)range->base + align_mask, align_mask );
-        do
-        {
-            if (start >= end || start < base || (char *)end - (char *)start < size) return NULL;
-            if (start < range->end && start >= range->base && (char *)range->end - (char *)start >= size) break;
-            if (++range == free_ranges_end) return NULL;
-            start = ROUND_ADDR( (char *)range->base + align_mask, align_mask );
-        }
-        while (1);
-    }
-    return start;
-}
-
-
-/***********************************************************************
- *           remove_reserved_area
- *
- * Remove a reserved area from the list maintained by libwine.
- * virtual_mutex must be held by caller.
- */
-static void remove_reserved_area( void *addr, size_t size )
-{
-    struct file_view *view;
-    size_t view_size;
-
-    TRACE( "removing %p-%p\n", addr, (char *)addr + size );
-    mmap_remove_reserved_area( addr, size );
-
-    /* unmap areas not covered by an existing view */
-    WINE_RB_FOR_EACH_ENTRY( view, &views_tree, struct file_view, entry )
-    {
-        if ((char *)view->base >= (char *)addr + size) break;
-        if ((char *)view->base + view->size <= (char *)addr) continue;
-        if (view->base > addr) munmap( addr, (char *)view->base - (char *)addr );
-        if ((char *)view->base + view->size > (char *)addr + size) return;
-        view_size = ROUND_SIZE( view->base, view->size, host_page_mask );
-        size = (char *)addr + size - ((char *)view->base + view_size);
-        addr = (char *)view->base + view_size;
-    }
-    munmap( addr, size );
-}
-
+#ifndef _WIN64
 
 /***********************************************************************
  *           free_reserved_memory
  *
  * Free reserved areas within a given range.
  */
-static void free_reserved_memory( char *base, char *limit )
+static void free_reserved_memory( void *start, void *end )
 {
-    struct reserved_area *area;
+    unsigned int area;
 
-    for (;;)
+    assert( !((UINT_PTR)start & granularity_mask) );
+    assert( !((UINT_PTR)end & granularity_mask) );
+
+    for (area = find_mem_area( start ); start < end; start = mem_area_base( ++area ))
     {
-        int removed = 0;
-
-        LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+        if (mem_area_state( area ) == AREA_RESERVED)
         {
-            char *area_base = area->base;
-            char *area_end = area_base + area->size;
-
-            if (area_end <= base) continue;
-            if (area_base >= limit) return;
-            if (area_base < base) area_base = base;
-            if (area_end > limit) area_end = limit;
-            remove_reserved_area( area_base, area_end - area_base );
-            removed = 1;
-            break;
+            size_t size = (char *)min( end, mem_area_end( area )) - (char *)start;
+            munmap( start, size );
+            set_mem_area_state( start, size, AREA_FREE );
+            area = find_mem_area( start );  /* area offsets have changed */
         }
-        if (!removed) return;
     }
 }
+
+
+/***********************************************************************
+ *           virtual_release_address_space
+ *
+ * Release some address space once we have loaded and initialized the app.
+ */
+static void virtual_release_address_space(void)
+{
+    free_reserved_memory( (char *)0x20000000, (char *)0x7f000000 );
+}
+
+#endif  /* _WIN64 */
 
 
 /***********************************************************************
@@ -1708,34 +1394,20 @@ static void free_reserved_memory( char *base, char *limit )
  */
 static void unmap_area( void *start, size_t size )
 {
-    struct reserved_area *area;
+    unsigned int area;
     void *end;
 
     assert( !((UINT_PTR)start & host_page_mask) );
     size = ROUND_SIZE( 0, size, host_page_mask );
     end = (char *)start + size;
 
-    LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+    for (area = find_mem_area( start ); start < end; start = mem_area_base( ++area ))
     {
-        void *area_start = area->base;
-        void *area_end = (char *)area_start + area->size;
+        size_t size = (char *)min( end, mem_area_end( area )) - (char *)start;
 
-        if (area_start >= end) break;
-        if (area_end <= start) continue;
-        if (area_start > start)
-        {
-            munmap( start, (char *)area_start - (char *)start );
-            start = area_start;
-        }
-        if (area_end >= end)
-        {
-            anon_mmap_fixed( start, (char *)end - (char *)start, PROT_NONE, MAP_NORESERVE );
-            return;
-        }
-        anon_mmap_fixed( start, (char *)area_end - (char *)start, PROT_NONE, MAP_NORESERVE );
-        start = area_end;
+        if (mem_area_state( area ) == AREA_FREE) munmap( start, size );
+        else anon_mmap_fixed( start, size, PROT_NONE, MAP_NORESERVE );
     }
-    munmap( start, (char *)end - (char *)start );
 }
 
 
@@ -1778,12 +1450,11 @@ static void free_view( struct file_view *view )
 /***********************************************************************
  *           unregister_view
  *
- * Remove view from the tree and update free ranges. virtual_mutex must be held by caller.
+ * Remove view from the tree and update mem areas. virtual_mutex must be held by caller.
  */
 static void unregister_view( struct file_view *view )
 {
-    if (mmap_is_in_reserved_area( view->base, view->size ))
-        free_ranges_remove_view( view );
+    mem_area_remove_view( view );
     wine_rb_remove( &views_tree, &view->entry );
 }
 
@@ -1806,13 +1477,12 @@ static void delete_view( struct file_view *view ) /* [in] View */
 /***********************************************************************
  *           register_view
  *
- * Add view to the tree and update free ranges. virtual_mutex must be held by caller.
+ * Add view to the tree and update mem areas. virtual_mutex must be held by caller.
  */
 static void register_view( struct file_view *view )
 {
     wine_rb_put( &views_tree, view->base, &view->entry );
-    if (mmap_is_in_reserved_area( view->base, view->size ))
-        free_ranges_insert_view( view );
+    mem_area_add_view( view );
 }
 
 
@@ -2101,37 +1771,35 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
 static void *map_reserved_area( void *limit_low, void *limit_high, size_t size, int top_down,
                                 int unix_prot, size_t align_mask )
 {
-    void *ptr = NULL;
-    struct reserved_area *area;
+    void *start, *end, *ptr = NULL;
+    unsigned int area;
+
+    limit_low = (void *)ROUND_SIZE( 0, limit_low, align_mask );
+    limit_high = ROUND_ADDR( limit_high, host_page_mask );
 
     if (top_down)
     {
-        LIST_FOR_EACH_ENTRY_REV( area, &reserved_areas, struct reserved_area, entry )
+        end = limit_high;
+        for (area = find_mem_area( end ); end > limit_low; end = mem_area_end( --area ))
         {
-            void *start = area->base;
-            void *end = (char *)start + area->size;
-
-            if (start >= limit_high) continue;
-            if (end <= limit_low) return NULL;
-            if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
-            if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
-            ptr = find_reserved_free_area( start, end, size, top_down, align_mask );
-            if (ptr) break;
+            if (mem_area_state( area ) != AREA_RESERVED) continue;
+            start = ROUND_ADDR( (char *)mem_area_base( area ) + align_mask, align_mask );
+            if (start >= end || (char *)end - (char *)start < size) continue;
+            ptr = ROUND_ADDR( (char *)end - size, align_mask );
+            break;
         }
     }
     else
     {
-        LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+        start = limit_low;
+        for (area = find_mem_area( start ); start < limit_high; start = mem_area_base( ++area ))
         {
-            void *start = area->base;
-            void *end = (char *)start + area->size;
-
-            if (start >= limit_high) return NULL;
-            if (end <= limit_low) continue;
-            if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
-            if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
-            ptr = find_reserved_free_area( start, end, size, top_down, align_mask );
-            if (ptr) break;
+            if (mem_area_state( area ) != AREA_RESERVED) continue;
+            start = ROUND_ADDR( (char *)start + align_mask, align_mask );
+            end = min( limit_high, mem_area_end( area ));
+            if (start >= end || (char *)end - (char *)start < size) continue;
+            ptr = start;
+            break;
         }
     }
     if (ptr && anon_mmap_fixed( ptr, size, unix_prot, 0 ) != ptr) ptr = NULL;
@@ -2146,35 +1814,33 @@ static void *map_reserved_area( void *limit_low, void *limit_high, size_t size, 
  */
 static NTSTATUS map_fixed_area( void *base, size_t size, int unix_prot )
 {
-    struct reserved_area *area;
+    unsigned int area, start_area;
     NTSTATUS status;
-    char *start = base, *end = (char *)base + ROUND_SIZE( 0, size, host_page_mask );
+    char *start, *end = (char *)base + ROUND_SIZE( 0, size, host_page_mask );
 
     if ((UINT_PTR)base & host_page_mask) return STATUS_CONFLICTING_ADDRESSES;
-    if (find_view_range( base, size )) return STATUS_CONFLICTING_ADDRESSES;
 
-    LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+    start_area = find_mem_area( base );
+    for (start = base, area = start_area; start < end; start = mem_area_base( ++area ))
+        if (mem_area_state( area ) == AREA_BLOCKED) return STATUS_CONFLICTING_ADDRESSES;
+
+    for (area = start_area; (char *)mem_area_base(area) < end; area++)
     {
-        char *area_start = area->base;
-        char *area_end = area_start + area->size;
-
-        if (area_start >= end) break;
-        if (area_end <= start) continue;
-        if (area_start > start)
-        {
-            if (anon_mmap_tryfixed( start, area_start - start, unix_prot, 0 ) == MAP_FAILED) goto failed;
-            start = area_start;
-        }
-        if (area_end >= end)
-        {
-            if (anon_mmap_fixed( start, end - start, unix_prot, 0 ) == MAP_FAILED) goto failed;
-            return STATUS_SUCCESS;
-        }
-        if (anon_mmap_fixed( start, area_end - start, unix_prot, 0 ) == MAP_FAILED) goto failed;
-        start = area_end;
+        if (mem_area_state( area ) != AREA_ALLOCATED) continue;
+        /* if any part of the range is allocated, we need a (slower) explicit check for views */
+        if (find_view_range( base, size )) return STATUS_CONFLICTING_ADDRESSES;
+        break;
     }
 
-    if (anon_mmap_tryfixed( start, end - start, unix_prot, 0 ) == MAP_FAILED) goto failed;
+    for (start = base, area = start_area; start < end; start = mem_area_base( ++area ))
+    {
+        size_t size = min( end, (char *)mem_area_end( area )) - start;
+
+        if ((mem_area_state( area ) != AREA_FREE ?
+             anon_mmap_fixed( start, size, unix_prot, 0 ) :
+             anon_mmap_tryfixed( start, size, unix_prot, 0 )) == MAP_FAILED)
+            goto failed;
+    }
     return STATUS_SUCCESS;
 
 failed:
@@ -2699,8 +2365,6 @@ static NTSTATUS map_pe_header( void *ptr, size_t size, size_t map_size, int fd, 
     return STATUS_SUCCESS;  /* page protections will be updated later */
 }
 
-#ifdef _WIN64
-
 /***********************************************************************
  *           get_host_addr_space_limit
  */
@@ -2709,17 +2373,13 @@ static void *get_host_addr_space_limit(void)
 #ifdef __APPLE__
     /* See MACH_VM_MAX_ADDRESS_RAW in xnu osfmk/mach/arm/vm_param.h */
     return (void *)0x7ffffe000000;
-#else
-    unsigned int flags = MAP_PRIVATE | MAP_ANON;
+#elif defined _WIN64
     UINT_PTR addr = (UINT_PTR)1 << 63;
-
-#ifdef MAP_FIXED_NOREPLACE
-    flags |= MAP_FIXED_NOREPLACE;
-#endif
 
     while (addr >> 32)
     {
-        void *ret = mmap( (void *)addr, host_page_size, PROT_NONE, flags, -1, 0 );
+        void *ret = mmap( (void *)addr, host_page_size, PROT_NONE,
+                          MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON, -1, 0 );
         if (ret != MAP_FAILED)
         {
             munmap( ret, host_page_size );
@@ -2729,10 +2389,18 @@ static void *get_host_addr_space_limit(void)
         addr >>= 1;
     }
     return (void *)((addr << 1) - (granularity_mask + 1));
+#else
+    if (__builtin_frame_address(0) < address_space_limit)
+    {
+        void *ret = anon_mmap_tryfixed( address_space_limit, host_page_size, PROT_NONE, MAP_NORESERVE );
+        if (ret == MAP_FAILED && errno != EEXIST) return address_space_limit;
+    }
+    /* assume 4G space (and make sure that the last block is not available) */
+    address_space_limit = (void *)0xffff0000;
+    anon_mmap_tryfixed( address_space_limit, host_page_size, PROT_NONE, MAP_NORESERVE );
+    return address_space_limit;
 #endif
 }
-
-#endif /* _WIN64 */
 
 #ifdef __aarch64__
 
@@ -3569,55 +3237,6 @@ done:
 }
 
 
-/* allocate some space for the virtual heap, if possible from a reserved area */
-#ifndef _WIN64
-static void *alloc_virtual_heap( SIZE_T size )
-{
-    struct reserved_area *area;
-    const char *preload = getenv( "WINEPRELOADRESERVE" );
-    void *ret, *preload_reserve_start = NULL, *preload_reserve_end = NULL;
-
-    if (preload)
-    {
-        unsigned long start, end;
-        if (sscanf( preload, "%lx-%lx", &start, &end ) == 2)
-        {
-            preload_reserve_start = ROUND_ADDR( start, granularity_mask );
-            preload_reserve_end = (void *)ROUND_SIZE( 0, end, granularity_mask );
-        }
-        unsetenv( "WINEPRELOADRESERVE" );
-    }
-
-    size = ROUND_SIZE( 0, size, granularity_mask );
-
-    LIST_FOR_EACH_ENTRY_REV( area, &reserved_areas, struct reserved_area, entry )
-    {
-        void *base = area->base;
-        void *end = (char *)base + area->size;
-
-        if (is_beyond_limit( base, area->size, address_space_limit ))
-            address_space_limit = host_addr_space_limit = end;
-        if (preload_reserve_end >= end)
-        {
-            if (preload_reserve_start <= base) continue;  /* no space in that area */
-            if (preload_reserve_start < end) end = preload_reserve_start;
-        }
-        else if (preload_reserve_end > base)
-        {
-            if (preload_reserve_start <= base) base = preload_reserve_end;
-            else if ((char *)end - (char *)preload_reserve_end >= size) base = preload_reserve_end;
-            else end = preload_reserve_start;
-        }
-        if ((char *)end - (char *)base < size) continue;
-        ret = anon_mmap_fixed( (char *)end - size, size, PROT_READ | PROT_WRITE, 0 );
-        if (ret == MAP_FAILED) continue;
-        mmap_remove_reserved_area( ret, size );
-        return ret;
-    }
-    return anon_mmap_alloc( size, PROT_READ | PROT_WRITE );
-}
-#endif
-
 /***********************************************************************
  *           virtual_init
  */
@@ -3639,13 +3258,11 @@ void virtual_init(void)
     host_page_mask = host_page_size - 1;
     TRACE( "host page size: %uk\n", (UINT)host_page_size / 1024 );
 #endif
-
-#ifdef _WIN64
     host_addr_space_limit = get_host_addr_space_limit();
     TRACE( "host addr space limit: %p\n", host_addr_space_limit );
-#else
-    host_addr_space_limit = address_space_limit;
-#endif
+
+    mem_areas = anon_mmap_alloc( mem_areas_size * sizeof(*mem_areas), PROT_READ | PROT_WRITE );
+    memcpy( mem_areas, initial_mem_areas, mem_areas_count * sizeof(*mem_areas) );
 
     if (preload_info) for (int i = 0; preload_info[i].size; i++)
     {
@@ -3658,33 +3275,31 @@ void virtual_init(void)
             size -= (char *)low_64k - (char *)addr;
             addr = low_64k;
         }
-        mmap_add_reserved_area( addr, size );
+        set_mem_area_state( addr, size, AREA_RESERVED );
     }
-
-    mmap_init( preload_info );
+    else if (is_win64)
+    {
+        reserve_area( (void *)0x00010000, (void *)0x200000000 );
+    }
+    else
+    {
+        reserve_area( (void *)0x00010000, (void *)0x40000000 );
+        reserve_area( (void *)0x7f000000, (void *)0x7fff0000 );
+    }
 
 #ifdef _WIN64
     pages_vprot_size = ((size_t)host_addr_space_limit >> page_shift >> pages_vprot_shift) + 1;
+    pages_vprot = calloc( pages_vprot_size, sizeof(*pages_vprot) );
+    assert( pages_vprot != NULL );
+#else
+    pages_vprot = anon_mmap_alloc( 1U << (32 - page_shift), PROT_READ | PROT_WRITE );
+    assert( pages_vprot != MAP_FAILED );
+#endif
     view_block_start = anon_mmap_alloc( view_block_size, PROT_READ | PROT_WRITE );
     view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
-    free_ranges = anon_mmap_alloc( view_block_size, PROT_READ | PROT_WRITE );
-    pages_vprot = anon_mmap_alloc( pages_vprot_size * sizeof(*pages_vprot), PROT_READ | PROT_WRITE );
-#else
-    /* try to find space in a reserved area for the views and pages protection table */
-    view_block_start = alloc_virtual_heap( 2 * view_block_size + (1U << (32 - page_shift)) );
-    view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
-    free_ranges = (void *)((char *)view_block_start + view_block_size);
-    pages_vprot = (void *)((char *)view_block_start + 2 * view_block_size);
-#endif
     assert( view_block_start != MAP_FAILED );
-    assert( free_ranges != MAP_FAILED );
-    assert( pages_vprot != MAP_FAILED );
     wine_rb_init( &views_tree, compare_view );
     kernel_writewatch_init();
-
-    free_ranges[0].base = (void *)0;
-    free_ranges[0].end = (void *)~0;
-    free_ranges_end = free_ranges + 1;
 }
 
 
@@ -4027,6 +3642,20 @@ static struct thread_data *init_thread_data( void *ptr )
 /* enable use of a large address space when allowed by the application */
 static void set_large_address_space(void)
 {
+    if (is_machine_64bit( main_image_info.Machine ))
+    {
+        void *start = (void *)0x7ff000000000;
+        void *end = (void *)0x7ff600000000;
+
+        if (start > host_addr_space_limit)
+        {
+            end = ROUND_ADDR( host_addr_space_limit, limit_4g - 1 );
+            start = (char *)end - limit_4g;
+        }
+        reserve_area( start, end );
+        return;
+    }
+
     if (main_image_info.Machine == IMAGE_FILE_MACHINE_I386)
     {
         /* reserve the DOS area, and make it accessible (except the low 64K)
@@ -4039,24 +3668,22 @@ static void set_large_address_space(void)
 
     if (is_win64)
     {
-        if (!is_wow64())
-        {
-#ifndef __APPLE__  /* don't free the zerofill section on macOS */
-            if (use_aslr()) free_reserved_memory( 0, (char *)0x7ffe0000 );
-#endif
-        }
-        else if (main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)
+        if (main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)
         {
             user_space_wow_limit = limit_4g - 1;
-            /* reserve space for top-down allocations; some apps break if the entire high 2G is available */
-            reserve_area( (void *)0xfff00000, (void *)0xffff0000 );
+            /* block a bit of top memory: some apps break if the entire high 2G is available */
+            set_mem_area_state( (void *)0xfffe0000, 0x20000, AREA_BLOCKED );
         }
-        else user_space_wow_limit = limit_2g - 1;
+        else
+        {
+            user_space_wow_limit = limit_2g - 1;
+            set_mem_area_state( (void *)0x7fff0000, 0x10000, AREA_BLOCKED );
+        }
     }
-    else
+    else if (!(main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE))
     {
-        if (!(main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)) return;
-        free_reserved_memory( (char *)0x80000000, address_space_limit );
+        reserve_area( (void *)limit_2g, host_addr_space_limit );
+        return;
     }
     user_space_limit = working_set_limit = address_space_limit;
 }
@@ -4070,6 +3697,8 @@ struct thread_data *virtual_alloc_first_thread_data(void)
     unsigned int status;
     struct thread_data *thread_data;
     struct file_view *view;
+    size_t size = signal_stack_mask + 1 + kernel_stack_size;
+    void *ptr;
 
     /* reserve space for shared user data */
     status = map_view( &view, user_shared_data, page_size, 0, VPROT_READ | VPROT_COMMITTED, 0, 0, 0 );
@@ -4079,9 +3708,12 @@ struct thread_data *virtual_alloc_first_thread_data(void)
         exit(1);
     }
 
-    status = map_view( &view, NULL, signal_stack_mask + 1 + kernel_stack_size, MEM_TOP_DOWN,
-                       VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, 4 * limit_4g, 0, 0 );
+    ptr = anon_mmap_alloc( size, PROT_READ | PROT_WRITE );
+    assert( ptr != MAP_FAILED );
+    status = create_view( &view, ptr, size, VPROT_READ | VPROT_WRITE | VPROT_COMMITTED );
     assert( !status );
+    VIRTUAL_DEBUG_DUMP_VIEW( view );
+
     thread_data = init_thread_data( view->base );
     pthread_setspecific( thread_data_key, thread_data );
     return thread_data;
@@ -4218,6 +3850,8 @@ void virtual_free_thread_data( struct thread_data *data )
     SIZE_T size;
     sigset_t sigset;
     WOW_TEB *wow_teb;
+
+    if (process_exiting) return;
 
     if (!(teb = data->teb)) goto done;
 
@@ -5078,24 +4712,6 @@ void virtual_enable_write_exceptions( BOOL enable )
 }
 
 
-#ifndef _WIN64
-
-/***********************************************************************
- *           virtual_release_address_space
- *
- * Release some address space once we have loaded and initialized the app.
- */
-static void virtual_release_address_space(void)
-{
-#ifndef __APPLE__  /* On macOS, we still want to free some of low memory, for OpenGL resources */
-    if (user_space_limit > (void *)limit_2g) return;
-#endif
-    free_reserved_memory( (char *)0x20000000, (char *)0x7f000000 );
-}
-
-#endif  /* _WIN64 */
-
-
 /***********************************************************************
  *             allocate_virtual_memory
  *
@@ -5639,41 +5255,32 @@ static struct file_view *get_memory_region_size( char *base, char **region_start
     }
 #ifdef __i386__
     {
-        struct reserved_area *area;
+        unsigned int area = find_mem_area( base );
 
         /* on i386, pretend that space outside of a reserved area is allocated,
          * so that the app doesn't believe it's fully available */
-        LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+        if (mem_area_state( area ) != AREA_FREE)
         {
-            char *area_start = area->base;
-            char *area_end = area_start + area->size;
+            *region_start = max( *region_start, (char *)mem_area_base( area ));
+            *region_end   = min( *region_end, (char *)mem_area_end( area ));
+            return NULL;
+        }
 
-            if (area_end <= base)
+        /* report the remaining part of the 64K after the view as free */
+        if ((UINT_PTR)*region_start & granularity_mask)
+        {
+            char *next = (char *)ROUND_ADDR( *region_start, granularity_mask ) + granularity_mask + 1;
+
+            if (base < next)
             {
-                if (*region_start < area_end) *region_start = area_end;
-                continue;
-            }
-            if (area_start <= base || area_start <= (char *)address_space_start)
-            {
-                if (area_end < *region_end) *region_end = area_end;
+                *region_end = min( next, *region_end );
                 return NULL;
             }
-            /* report the remaining part of the 64K after the view as free */
-            if ((UINT_PTR)*region_start & granularity_mask)
-            {
-                char *next = (char *)ROUND_ADDR( *region_start, granularity_mask ) + granularity_mask + 1;
-
-                if (base < next)
-                {
-                    *region_end = min( next, *region_end );
-                    return NULL;
-                }
-                else *region_start = base;
-            }
-            /* pretend it's allocated */
-            if (area_start < *region_end) *region_end = area_start;
-            break;
+            *region_start = base;
         }
+        /* pretend it's allocated */
+        if (mem_area_end( area ) <= address_space_start) area++;
+        *region_end = min( *region_end, (char *)mem_area_end( area ));
         *fake_reserved = TRUE;
     }
 #endif

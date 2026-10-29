@@ -975,6 +975,7 @@ enum d3dkmt_type
     D3DKMT_SYNC         = 5,
     D3DKMT_RESOURCE     = 6,
     D3DKMT_ALLOCATION   = 7,
+    D3DKMT_SWAPCHAIN    = 8,
 };
 
 
@@ -2204,6 +2205,18 @@ struct read_change_reply
 {
     struct reply_header __header;
     /* VARARG(events,filesystem_event); */
+};
+
+
+
+struct unmount_device_request
+{
+    struct request_header __header;
+    int          dev;
+};
+struct unmount_device_reply
+{
+    struct reply_header __header;
 };
 
 
@@ -4813,20 +4826,20 @@ struct remove_clipboard_listener_reply
 struct create_token_request
 {
     struct request_header __header;
-    struct luid    token_id;
+    struct luid    auth_id;
     unsigned int   access;
     int            primary;
     int            impersonation_level;
     abstime_t      expire;
     int            group_count;
-    int            primary_group;
     int            priv_count;
 
 
 
 
 
-    char __pad_52[4];
+
+
 };
 struct create_token_reply
 {
@@ -6311,6 +6324,7 @@ enum request
     REQ_get_next_console_request,
     REQ_read_directory_changes,
     REQ_read_change,
+    REQ_unmount_device,
     REQ_create_mapping,
     REQ_open_mapping,
     REQ_get_mapping_info,
@@ -6626,6 +6640,7 @@ union generic_request
     struct get_next_console_request_request get_next_console_request_request;
     struct read_directory_changes_request read_directory_changes_request;
     struct read_change_request read_change_request;
+    struct unmount_device_request unmount_device_request;
     struct create_mapping_request create_mapping_request;
     struct open_mapping_request open_mapping_request;
     struct get_mapping_info_request get_mapping_info_request;
@@ -6939,6 +6954,7 @@ union generic_reply
     struct get_next_console_request_reply get_next_console_request_reply;
     struct read_directory_changes_reply read_directory_changes_reply;
     struct read_change_reply read_change_reply;
+    struct unmount_device_reply unmount_device_reply;
     struct create_mapping_reply create_mapping_reply;
     struct open_mapping_reply open_mapping_reply;
     struct get_mapping_info_reply get_mapping_info_reply;
@@ -7186,6 +7202,6 @@ union generic_reply
     struct alpc_create_port_reply alpc_create_port_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 963
+#define SERVER_PROTOCOL_VERSION 968
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */

@@ -458,7 +458,8 @@ static HRESULT parse_wave_item(struct wave_part *part, IStream *stream, struct c
         goto error;
     }
 
-    if (FAILED(hr = stream_chunk_get_data(stream, &chunk, &item->header, sizeof(item->header)))) {
+    if (FAILED(hr = stream_chunk_get_data_alt(stream, &chunk, &item->header, sizeof(item->header),
+                offsetof(DMUS_IO_WAVE_ITEM_HEADER, wVolumeRange)))) {
         WARN("Failed to read data of %s\n", debugstr_chunk(&chunk));
         goto error;
     }
@@ -613,7 +614,7 @@ HRESULT create_dmwavetrack(REFIID lpcGUID, void **ppobj)
 }
 
 HRESULT wave_track_create_from_chunk(IStream *stream, struct chunk_entry *parent,
-        IDirectMusicTrack8 **ret_iface)
+        IDirectMusicTrack8 **ret_iface, REFERENCE_TIME *ret_duration)
 {
     IDirectMusicTrack8 *iface;
     struct wave_track *This;
@@ -644,5 +645,6 @@ HRESULT wave_track_create_from_chunk(IStream *stream, struct chunk_entry *parent
     list_add_tail(&part->items, &item->entry);
 
     *ret_iface = iface;
+    *ret_duration = item->header.rtDuration;
     return S_OK;
 }

@@ -853,6 +853,11 @@ static void dump_read_change_reply( const struct read_change_reply *req )
     dump_varargs_filesystem_event( " events=", cur_size );
 }
 
+static void dump_unmount_device_request( const struct unmount_device_request *req )
+{
+    fprintf( stderr, " dev=%d", req->dev );
+}
+
 static void dump_create_mapping_request( const struct create_mapping_request *req )
 {
     fprintf( stderr, " access=%08x", req->access );
@@ -2581,13 +2586,12 @@ static void dump_remove_clipboard_listener_request( const struct remove_clipboar
 
 static void dump_create_token_request( const struct create_token_request *req )
 {
-    dump_luid( " token_id=", &req->token_id );
+    dump_luid( " auth_id=", &req->auth_id );
     fprintf( stderr, ", access=%08x", req->access );
     fprintf( stderr, ", primary=%d", req->primary );
     fprintf( stderr, ", impersonation_level=%d", req->impersonation_level );
     dump_abstime( ", expire=", &req->expire );
     fprintf( stderr, ", group_count=%d", req->group_count );
-    fprintf( stderr, ", primary_group=%d", req->primary_group );
     fprintf( stderr, ", priv_count=%d", req->priv_count );
 }
 
@@ -3606,6 +3610,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_get_next_console_request_request,
     (dump_func)dump_read_directory_changes_request,
     (dump_func)dump_read_change_request,
+    (dump_func)dump_unmount_device_request,
     (dump_func)dump_create_mapping_request,
     (dump_func)dump_open_mapping_request,
     (dump_func)dump_get_mapping_info_request,
@@ -3918,6 +3923,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_get_next_console_request_reply,
     NULL,
     (dump_func)dump_read_change_reply,
+    NULL,
     (dump_func)dump_create_mapping_reply,
     (dump_func)dump_open_mapping_reply,
     (dump_func)dump_get_mapping_info_reply,
@@ -4230,6 +4236,7 @@ static const char * const req_names[REQ_NB_REQUESTS] =
     "get_next_console_request",
     "read_directory_changes",
     "read_change",
+    "unmount_device",
     "create_mapping",
     "open_mapping",
     "get_mapping_info",
