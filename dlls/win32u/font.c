@@ -2271,7 +2271,7 @@ static struct gdi_font_face *find_matching_face( const LOGFONTW *lf, CHARSETINFO
 
     if (!translate_charset_info( (DWORD *)(INT_PTR)lf->lfCharSet, csi, TCI_SRCCHARSET ))
     {
-        if (lf->lfCharSet != DEFAULT_CHARSET) FIXME( "Untranslated charset %d\n", lf->lfCharSet );
+        if (lf->lfCharSet != DEFAULT_CHARSET && lf->lfCharSet != OEM_CHARSET) FIXME( "Untranslated charset %d\n", lf->lfCharSet );
         csi->fs.fsCsb[0] = 0;
     }
 
@@ -2294,8 +2294,8 @@ static struct gdi_font_face *find_matching_face( const LOGFONTW *lf, CHARSETINFO
     }
     *substituted = FALSE; /* substitution is no longer relevant */
 
-    /* If requested charset was DEFAULT_CHARSET then try using charset
-       corresponding to the current ansi codepage */
+    /* If requested charset was DEFAULT_CHARSET or OEM_CHARSET then try using
+       charset corresponding to the current ansi codepage */
     if (!csi->fs.fsCsb[0])
     {
         if (!translate_charset_info( (DWORD *)(INT_PTR)ansi_cp.CodePage, csi, TCI_SRCCODEPAGE ))
