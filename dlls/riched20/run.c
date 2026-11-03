@@ -720,6 +720,11 @@ SIZE ME_GetRunSizeCommon(ME_Context *c, const ME_Paragraph *para, ME_Run *run, i
         pos = shift + (pFmt->rgxTabs[i]&0x00FFFFFF);
         i++;
       }
+      else if (i < pFmt->cTabCount + c->editor->defaultTabCount)
+      {
+        pos = c->editor->defaultTabStops[i - pFmt->cTabCount];
+        i++;
+      }
       else
       {
         pos += lDefaultTab - (pos % lDefaultTab);

@@ -3053,6 +3053,8 @@ ME_TextEditor *ME_MakeEditor(ITextHost *texthost, BOOL bEmulateVersion10)
   ed->AutoURLDetect_bEnable = FALSE;
   ed->bHaveFocus = FALSE;
   ed->freeze_count = 0;
+  ed->langOptions = IMF_AUTOKEYBOARD | IMF_AUTOFONT;
+  ed->defaultTabCount = 0;
   ed->bMouseCaptured = FALSE;
   ed->caret_hidden = FALSE;
   ed->caret_height = 0;
@@ -3327,17 +3329,35 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
   UNSUPPORTED_MSG(EM_GETIMECOMPMODE)
   UNSUPPORTED_MSG(EM_GETIMESTATUS)
   UNSUPPORTED_MSG(EM_SETIMESTATUS)
-  UNSUPPORTED_MSG(EM_GETLANGOPTIONS)
+  case EM_GETLANGOPTIONS:
+    return editor->langOptions;
   UNSUPPORTED_MSG(EM_GETREDONAME)
   UNSUPPORTED_MSG(EM_GETTYPOGRAPHYOPTIONS)
   UNSUPPORTED_MSG(EM_GETUNDONAME)
   UNSUPPORTED_MSG(EM_GETWORDBREAKPROCEX)
   UNSUPPORTED_MSG(EM_SETBIDIOPTIONS)
   UNSUPPORTED_MSG(EM_SETEDITSTYLE)
-  UNSUPPORTED_MSG(EM_SETLANGOPTIONS)
+  case EM_SETLANGOPTIONS:
+  {
+    LRESULT prev = editor->langOptions;
+    editor->langOptions = wParam;
+    return prev;
+  }
   UNSUPPORTED_MSG(EM_SETMARGINS)
   UNSUPPORTED_MSG(EM_SETPALETTE)
-  UNSUPPORTED_MSG(EM_SETTABSTOPS)
+  case EM_SETTABSTOPS:
+  {
+    int count = min(wParam, MAX_TAB_STOPS);
+    int i;
+    if (wParam && lParam)
+    {
+      const DWORD *tabs = (const DWORD *)lParam;
+      for (i = 0; i < count; i++)
+        editor->defaultTabStops[i] = (tabs[i] & 0x00ffffff) * lDefaultTab / 32;
+    }
+    editor->defaultTabCount = (wParam && lParam) ? count : 0;
+    return 1;
+  }
   UNSUPPORTED_MSG(EM_SETTYPOGRAPHYOPTIONS)
   UNSUPPORTED_MSG(EM_SETWORDBREAKPROCEX)
 
