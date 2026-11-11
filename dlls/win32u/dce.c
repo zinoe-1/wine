@@ -51,6 +51,17 @@ static struct list dce_list = LIST_INIT(dce_list);
 
 static struct list window_surfaces = LIST_INIT( window_surfaces );
 static pthread_mutex_t surfaces_lock = PTHREAD_MUTEX_INITIALIZER;
+static HWND locked_hwnd;
+
+static BOOL is_window_locked( HWND hwnd )
+{
+    while (hwnd)
+    {
+        if (hwnd == locked_hwnd) return TRUE;
+        hwnd = get_parent( hwnd );
+    }
+    return FALSE;
+}
 
 /*******************************************************************
  * Dummy window surface for windows that shouldn't get painted.
@@ -1552,6 +1563,12 @@ static HRGN send_ncpaint( HWND hwnd, HWND *child, UINT *flags )
 
     if (hwnd == get_desktop_window()) return whole_rgn;
 
+    if (locked_hwnd && is_window_locked( hwnd ))
+    {
+        if (whole_rgn) NtGdiDeleteObjectApp( whole_rgn );
+        return 0;
+    }
+
     if (whole_rgn)
     {
         struct window_rects rects;
@@ -2013,13 +2030,12 @@ BOOL WINAPI NtUserInvalidateRect( HWND hwnd, const RECT *rect, BOOL erase )
  */
 BOOL WINAPI NtUserLockWindowUpdate( HWND hwnd )
 {
-    static HWND locked_hwnd;
-
-    FIXME( "(%p), partial stub!\n", hwnd );
+    TRACE( "(%p)\n", hwnd );
 
     if (!hwnd)
     {
-        locked_hwnd = NULL;
+        HWND old = InterlockedExchangePointer( (void **)&locked_hwnd, NULL );
+        if (old) NtUserRedrawWindow( old, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME );
         return TRUE;
     }
     return !InterlockedCompareExchangePointer( (void **)&locked_hwnd, hwnd, 0 );
