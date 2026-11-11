@@ -2532,9 +2532,6 @@ HRESULT WINAPI OleLoadPictureEx( LPSTREAM lpstream, LONG lSize, BOOL fRunmode,
   IPicture	*newpic;
   HRESULT hr;
 
-  FIXME("%p, %ld, %d, %s, %lu, %lu, %#lx, %p, partially implemented.\n",
-	lpstream, lSize, fRunmode, debugstr_guid(riid), xsiz, ysiz, flags, ppvObj);
-
   hr = OleCreatePictureIndirect(NULL,riid,!fRunmode,(LPVOID*)&newpic);
   if (hr != S_OK)
     return hr;
@@ -2553,6 +2550,12 @@ HRESULT WINAPI OleLoadPictureEx( LPSTREAM lpstream, LONG lSize, BOOL fRunmode,
       IPicture_Release(newpic);
       *ppvObj = NULL;
       return hr;
+  }
+  if (xsiz || ysiz)
+  {
+      OLEPictureImpl *This = impl_from_IPicture( newpic );
+      This->himetricWidth = xsiz;
+      This->himetricHeight = ysiz;
   }
   hr = IPicture_QueryInterface(newpic,riid,ppvObj);
   if (hr != S_OK)
